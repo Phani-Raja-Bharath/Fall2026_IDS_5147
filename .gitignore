@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+
+# Local Streamlit secrets and environment files
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+**/.streamlit/secrets.toml
+
+# Local score databases
+stats_game.db
+**/stats_game.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.vscode/

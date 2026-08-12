@@ -112,6 +112,11 @@ DATABASE_URL = "postgresql://USER:PASSWORD@HOST.neon.tech/DBNAME?sslmode=require
 The app automatically uses Neon when `DATABASE_URL` or `NEON_DATABASE_URL` is available.
 Without either secret, it falls back to the local `stats_game.db` file.
 
+For local development, copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml`
+and paste your real Neon connection string there. The real secrets file is ignored by git.
+Keep using `DATABASE_URL` or `NEON_DATABASE_URL` for the database connection; `NEON_API_KEY`
+is included only as a safe placeholder if you need to store that key locally later.
+
 ## Classroom suggestion
 
 Give participants 20–30 minutes to work individually.

@@ -10,7 +10,6 @@ import pandas as pd
 import streamlit as st
 
 DB = "stats_game.db"
-ADMIN_PASSWORD = os.environ.get("STATSQUEST_ADMIN_PASSWORD", "changeme123")
 
 def get_secret(name):
     value = os.environ.get(name)
@@ -22,12 +21,14 @@ def get_secret(name):
         return None
 
 DATABASE_URL = get_secret("DATABASE_URL") or get_secret("NEON_DATABASE_URL")
+ADMIN_PASSWORD = get_secret("STATSQUEST_ADMIN_PASSWORD") or "changeme123"
 USE_POSTGRES = bool(DATABASE_URL)
 
 st.set_page_config(
     page_title="StatsQuest: Modeling & Simulation",
     page_icon="🎮",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 # -----------------------------
@@ -35,17 +36,102 @@ st.set_page_config(
 # -----------------------------
 st.markdown("""
 <style>
-.block-container {padding-top: 1.4rem;}
-.game-title {font-size: 2.1rem; font-weight: 800; margin-bottom: 0.1rem;}
-.game-subtitle {color: #666; margin-bottom: 1rem;}
+:root {
+    --statsquest-card-border: rgba(120,120,120,.25);
+}
+
+.block-container {
+    max-width: 1180px;
+    padding-top: 1.4rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+}
+
+.game-title {
+    font-size: clamp(1.65rem, 6vw, 2.1rem);
+    line-height: 1.12;
+    font-weight: 800;
+    margin-bottom: 0.1rem;
+}
+
+.game-subtitle {
+    color: #666;
+    margin-bottom: 1rem;
+    font-size: clamp(.95rem, 3vw, 1rem);
+}
+
 .level-card {
-    border: 1px solid rgba(120,120,120,.25);
-    border-radius: 16px;
+    border: 1px solid var(--statsquest-card-border);
+    border-radius: 8px;
     padding: 14px;
     margin-bottom: 10px;
 }
-.big-score {font-size: 2rem; font-weight: 800;}
+
+.big-score {
+    font-size: clamp(1.5rem, 5vw, 2rem);
+    font-weight: 800;
+}
+
 .small-muted {color:#777; font-size:.9rem;}
+
+div[data-testid="stMetric"] {
+    border: 1px solid var(--statsquest-card-border);
+    border-radius: 8px;
+    padding: .65rem .75rem;
+}
+
+div[data-testid="stMetricValue"] {
+    font-size: clamp(1.2rem, 5vw, 1.85rem);
+    line-height: 1.1;
+}
+
+div[data-testid="stDataFrame"] {
+    overflow-x: auto;
+}
+
+@media (max-width: 700px) {
+    .block-container {
+        padding-top: .75rem;
+        padding-left: .75rem;
+        padding-right: .75rem;
+    }
+
+    section[data-testid="stSidebar"] {
+        min-width: min(88vw, 22rem);
+    }
+
+    div[data-testid="stHorizontalBlock"] {
+        gap: .65rem;
+    }
+
+    div[data-testid="stHorizontalBlock"] > div {
+        min-width: 100%;
+        flex: 1 1 100%;
+    }
+
+    div[data-testid="stButton"] > button,
+    div[data-testid="stDownloadButton"] > button {
+        width: 100%;
+        min-height: 2.8rem;
+        white-space: normal;
+    }
+
+    div[role="radiogroup"] label {
+        min-height: 2.65rem;
+        align-items: flex-start;
+        padding-top: .45rem;
+        padding-bottom: .45rem;
+    }
+
+    .stSlider {
+        padding-left: .15rem;
+        padding-right: .15rem;
+    }
+
+    iframe {
+        max-width: 100%;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
