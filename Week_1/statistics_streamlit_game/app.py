@@ -3,6 +3,7 @@ import math
 import os
 import random
 import sqlite3
+import threading
 from datetime import datetime
 
 import numpy as np
@@ -38,25 +39,26 @@ st.markdown("""
 <style>
 :root {
     --statsquest-card-border: rgba(120,120,120,.25);
+    --statsquest-accent: #2563eb;
+    --statsquest-accent-hover: #1d4ed8;
 }
 
 .block-container {
     max-width: 1180px;
-    padding-top: 1.4rem;
-    padding-left: 1rem;
-    padding-right: 1rem;
+    padding: 2rem 1.5rem 3rem;
 }
 
 .game-title {
     font-size: clamp(1.65rem, 6vw, 2.1rem);
-    line-height: 1.12;
+    line-height: 1.25;
     font-weight: 800;
-    margin-bottom: 0.1rem;
+    margin: 0 0 .2rem;
+    padding-top: .1rem;
 }
 
 .game-subtitle {
-    color: #666;
-    margin-bottom: 1rem;
+    color: rgba(128,128,128,.95);
+    margin-bottom: 1.15rem;
     font-size: clamp(.95rem, 3vw, 1rem);
 }
 
@@ -89,11 +91,32 @@ div[data-testid="stDataFrame"] {
     overflow-x: auto;
 }
 
+div[data-testid="stAlert"] {
+    border-radius: 8px;
+}
+
+div[data-testid="stTextInput"] input {
+    min-height: 2.75rem;
+}
+
+div[data-testid="stButton"] > button[kind="primary"],
+div[data-testid="stDownloadButton"] > button[kind="primary"] {
+    background: var(--statsquest-accent);
+    border-color: var(--statsquest-accent);
+    color: #fff;
+}
+
+div[data-testid="stButton"] > button[kind="primary"]:hover,
+div[data-testid="stDownloadButton"] > button[kind="primary"]:hover {
+    background: var(--statsquest-accent-hover);
+    border-color: var(--statsquest-accent-hover);
+    color: #fff;
+}
+
 @media (max-width: 700px) {
     .block-container {
-        padding-top: .75rem;
-        padding-left: .75rem;
-        padding-right: .75rem;
+        padding: 1.25rem .75rem 2rem;
+        max-width: 100%;
     }
 
     section[data-testid="stSidebar"] {
@@ -102,10 +125,11 @@ div[data-testid="stDataFrame"] {
 
     div[data-testid="stHorizontalBlock"] {
         gap: .65rem;
+        flex-wrap: wrap;
     }
 
     div[data-testid="stHorizontalBlock"] > div {
-        min-width: 100%;
+        min-width: min(100%, 16rem);
         flex: 1 1 100%;
     }
 
@@ -143,30 +167,73 @@ def sql(sqlite_sql, postgres_sql=None):
         return postgres_sql or sqlite_sql.replace("?", "%s")
     return sqlite_sql
 
-class PostgresConnection:
-    def __init__(self, connection):
-        self.connection = connection
+class DBConnection:
+    """sqlite3.Connection-shaped wrapper over either the shared cached SQLite
+    connection or a pooled Postgres connection, so the rest of the app stays
+    agnostic to which backend is active.
+
+    The underlying connection/pool is created once per process (see
+    `_sqlite_connection` / `_postgres_pool` below) and reused across reruns
+    instead of opening a brand-new network connection on every query.
+    `close()` releases the connection back to its pool (Postgres) or is a
+    no-op (SQLite, where the connection is long-lived) — callers keep calling
+    it exactly as before.
+    """
+
+    def __init__(self, raw, *, lock=None, pool=None):
+        self._raw = raw
+        self._lock = lock
+        self._pool = pool
 
     def execute(self, query, params=None):
-        cursor = self.connection.cursor()
+        if self._lock is not None:
+            with self._lock:
+                return self._raw.execute(query, params or ())
+        cursor = self._raw.cursor()
         cursor.execute(query, params or ())
         return cursor
 
     def cursor(self):
-        return self.connection.cursor()
+        return self._raw.cursor()
 
     def commit(self):
-        self.connection.commit()
+        if self._lock is not None:
+            with self._lock:
+                self._raw.commit()
+        else:
+            self._raw.commit()
 
     def close(self):
-        self.connection.close()
+        if self._pool is not None:
+            self._pool.putconn(self._raw)
+        # else: the shared SQLite connection stays open for the app's lifetime.
+
+_sqlite_write_lock = threading.Lock()  # serializes writes on the one shared SQLite connection
+
+@st.cache_resource(show_spinner=False)
+def _sqlite_connection():
+    """A single SQLite connection shared for the app's lifetime instead of
+    reopening the database file on every helper call."""
+    return sqlite3.connect(DB, check_same_thread=False)
+
+@st.cache_resource(show_spinner=False)
+def _postgres_pool():
+    """A small connection pool shared for the app's lifetime instead of
+    opening a new network connection to Postgres on every helper call."""
+    from psycopg2.pool import ThreadedConnectionPool
+    return ThreadedConnectionPool(1, 10, DATABASE_URL)
 
 def conn():
     if USE_POSTGRES:
-        import psycopg2
-        c = PostgresConnection(psycopg2.connect(DATABASE_URL))
-    else:
-        c = sqlite3.connect(DB, check_same_thread=False)
+        pool = _postgres_pool()
+        return DBConnection(pool.getconn(), pool=pool)
+    return DBConnection(_sqlite_connection(), lock=_sqlite_write_lock)
+
+@st.cache_resource(show_spinner=False)
+def _ensure_schema():
+    """Create the tables once per process instead of re-running two
+    CREATE TABLE statements on every single conn() call."""
+    c = conn()
     c.execute(sql("""
         CREATE TABLE IF NOT EXISTS participants(
             pid TEXT PRIMARY KEY,
@@ -203,7 +270,8 @@ def conn():
         """,
     ))
     c.commit()
-    return c
+    c.close()
+    return True
 
 def make_pid(first, last, pin):
     return f"{first.strip().lower()}|{last.strip().lower()}|{pin.strip()}"
@@ -251,16 +319,20 @@ def participant_stats(pid):
 
 def leaderboard():
     c = conn()
+    # Aliases are double-quoted so Postgres preserves their exact case; unquoted
+    # aliases (e.g. `AS PID`) get silently folded to lowercase on Postgres (but
+    # not SQLite), which broke every `board["PID"]`-style lookup below whenever
+    # the app ran against Postgres instead of the local SQLite file.
     df = pd.read_sql_query("""
-        SELECT p.pid AS PID,
-               p.first_name || ' ' || p.last_name AS Name,
-               COALESCE(SUM(a.points),0) AS XP,
-               COALESCE(SUM(a.correct),0) AS Correct,
-               COUNT(a.id) AS Attempts
+        SELECT p.pid AS "PID",
+               p.first_name || ' ' || p.last_name AS "Name",
+               COALESCE(SUM(a.points),0) AS "XP",
+               COALESCE(SUM(a.correct),0) AS "Correct",
+               COUNT(a.id) AS "Attempts"
         FROM participants p
         LEFT JOIN challenge_attempts a ON a.pid=p.pid
         GROUP BY p.pid
-        ORDER BY XP DESC, Correct DESC, Attempts ASC
+        ORDER BY "XP" DESC, "Correct" DESC, "Attempts" ASC
     """, c)
     c.close()
     if not df.empty:
@@ -286,14 +358,51 @@ def challenge_history(pid, challenge):
     return df[df.challenge == challenge]
 
 # -----------------------------
+# Pre/post learning assessment
+# -----------------------------
+# Reuses the same challenge_attempts table (level 0 = pre, level 6 = post,
+# outside the 1-5 range used by real levels) so no schema change is needed.
+# Always recorded at 0 XP: these are a diagnostic, not part of the game score.
+
+def assessment_challenge_id(phase, key):
+    return f"{'PRE' if phase == 'pre' else 'POST'}_{key}"
+
+def assessment_level(phase):
+    return 0 if phase == "pre" else 6
+
+def record_diagnostic_answer(pid, phase, key, answer, correct):
+    """Record a single, non-retryable diagnostic response."""
+    challenge = assessment_challenge_id(phase, key)
+    if not challenge_history(pid, challenge).empty:
+        return  # already answered; diagnostic responses aren't retried
+    add_attempt(pid, assessment_level(phase), challenge, answer, correct, 0)
+
+def assessment_complete(pid, phase):
+    history = participant_stats(pid)
+    if history.empty:
+        return False
+    answered = set(history["challenge"].unique())
+    required = {assessment_challenge_id(phase, key) for key, *_ in ASSESSMENT_QUESTIONS}
+    return required.issubset(answered)
+
+def assessment_score(pid, phase):
+    total = len(ASSESSMENT_QUESTIONS)
+    history = participant_stats(pid)
+    if history.empty:
+        return 0, total
+    required = [assessment_challenge_id(phase, key) for key, *_ in ASSESSMENT_QUESTIONS]
+    scored = history[history["challenge"].isin(required) & (history["correct"] == 1)]
+    return int(scored["challenge"].nunique()), total
+
+# -----------------------------
 # Game config
 # -----------------------------
 LEVELS = {
-    1: {"name":"Center Stage", "icon":"🎯"},
-    2: {"name":"Spread Detective", "icon":"📏"},
-    3: {"name":"Distribution Dungeon", "icon":"🎲"},
-    4: {"name":"Arrival Arena", "icon":"✈️"},
-    5: {"name":"Monte Carlo Boss", "icon":"🏆"},
+    1: {"name":"Meanhaven Station", "icon":"🎯"},
+    2: {"name":"Spreadmoor Yards", "icon":"📏"},
+    3: {"name":"Distribution Junction", "icon":"🎲"},
+    4: {"name":"Arrivals Terminal", "icon":"✈️"},
+    5: {"name":"Control Core", "icon":"🏆"},
 }
 
 LEVEL_MAX_POINTS = {
@@ -320,11 +429,11 @@ CHALLENGE_NAMES = {
     "L2_CONSISTENCY": "Machine Consistency",
     "L2_SD": "Variability Lab",
     "L2_BONUS": "Level 2 Bonus",
-    "L3_Q1": "Dungeon Door 1",
-    "L3_Q2": "Dungeon Door 2",
-    "L3_Q3": "Dungeon Door 3",
-    "L3_Q4": "Dungeon Door 4",
-    "L3_BONUS": "Bonus Door",
+    "L3_Q1": "Junction Track 1",
+    "L3_Q2": "Junction Track 2",
+    "L3_Q3": "Junction Track 3",
+    "L3_Q4": "Junction Track 4",
+    "L3_BONUS": "Bonus Track",
     "L4_POISSON": "Arrival Count",
     "L4_EXP": "Waiting Time",
     "L4_BONUS": "Level 4 Bonus",
@@ -334,22 +443,92 @@ CHALLENGE_NAMES = {
 }
 
 PAGE_LEVELS = {
-    "🎯 Level 1 — Center Stage": 1,
-    "📏 Level 2 — Spread Detective": 2,
-    "🎲 Level 3 — Distribution Dungeon": 3,
-    "✈️ Level 4 — Arrival Arena": 4,
-    "🏆 Level 5 — Monte Carlo Boss": 5,
+    "🎯 Level 1 — Meanhaven Station": 1,
+    "📏 Level 2 — Spreadmoor Yards": 2,
+    "🎲 Level 3 — Distribution Junction": 3,
+    "✈️ Level 4 — Arrivals Terminal": 4,
+    "🏆 Level 5 — Control Core": 5,
 }
 
 PAGE_OPTIONS = [
+    "🧭 Diagnostic Check-In",
     "🏠 Home",
-    "🎯 Level 1 — Center Stage",
-    "📏 Level 2 — Spread Detective",
-    "🎲 Level 3 — Distribution Dungeon",
-    "✈️ Level 4 — Arrival Arena",
-    "🏆 Level 5 — Monte Carlo Boss",
+    "🎯 Level 1 — Meanhaven Station",
+    "📏 Level 2 — Spreadmoor Yards",
+    "🎲 Level 3 — Distribution Junction",
+    "✈️ Level 4 — Arrivals Terminal",
+    "🏆 Level 5 — Control Core",
+    "📊 Mastery Check-Out",
     "🥇 Leaderboard",
 ]
+
+# Five questions mirroring the five levels, asked once before Level 1 (baseline)
+# and again after Level 5 (check-out) to measure learning gain. Always 0 XP.
+ASSESSMENT_QUESTIONS = [
+    ("CENTER", "A dataset has one extremely large outlier. Which measure of center is pulled the most by it?",
+     ["Mean", "Median", "Mode"], "Mean"),
+    ("SPREAD", "Which single quantity best measures how spread out a dataset is around its mean?",
+     ["Standard deviation", "Median", "Mode"], "Standard deviation"),
+    ("DISTRIBUTION", "Which distribution models a fixed number of independent success/failure trials?",
+     ["Binomial", "Uniform", "Exponential"], "Binomial"),
+    ("ARRIVAL", "In a Poisson arrival process, which distribution models the time between two consecutive arrivals?",
+     ["Exponential", "Normal", "Binomial"], "Exponential"),
+    ("SIMULATION", "What is the main reason to run a Monte Carlo simulation many times instead of once?",
+     ["To estimate the range and likelihood of outcomes", "To eliminate all randomness", "To guarantee the best-case result"],
+     "To estimate the range and likelihood of outcomes"),
+]
+
+# -----------------------------
+# Story
+# -----------------------------
+STORY = {
+    "intro": (
+        "**Mission briefing.** The Analytika Grid — the network of statistical models running "
+        "the city's traffic dispatch, factory yards, arrivals terminal, and emergency response — "
+        "has gone unstable. Readings keep drifting off spec, and nobody can tell which numbers "
+        "to trust anymore.\n\n"
+        "You've just been sworn in as a **Data Cadet** of the Analytika Guild. **Dr. Aria Voss**, "
+        "the Guild's Chief Archivist, is sending you to recalibrate five stations along the Grid — "
+        "each one destabilized by a different statistical blind spot. Clear all five and you'll be "
+        "cleared to enter the Control Core, where the Grid's irreducible randomness — the "
+        "**Variance Wraith** — has to be *contained*, not deleted, by proving you understand how "
+        "simulation actually works.\n\n"
+        "Two short, ungraded check-ins bookend the mission: a **baseline** right now, before you "
+        "leave for Meanhaven Station, and a **check-out** once the Core is stable. Neither affects "
+        "your XP — they just show how much you actually learned."
+    ),
+    "pre_assessment": (
+        "*Dr. Voss:* \"Before you head out, Cadet — five quick questions so the Guild knows where "
+        "you're starting from. This is a baseline, not a test. Answer honestly; you'll see these "
+        "again once you've cleared every station.\""
+    ),
+    "post_assessment": (
+        "*Dr. Voss:* \"The Grid's stable again — nice work. One last formality: the same five "
+        "questions from your first day. Let's see how far you've actually come.\""
+    ),
+    "levels": {
+        1: "*Dr. Voss:* \"Meanhaven's dispatch board is reporting a commute time nobody recognizes. "
+           "Before you trust any number that claims to be *typical*, you need to know which measure "
+           "of center an outlier can quietly hijack.\"",
+        2: "*Dr. Voss:* \"Two machines in the Spreadmoor Yards report the exact same average output, "
+           "yet one keeps drifting out of spec. A mean alone can't catch that — you need to read the "
+           "spread.\"",
+        3: "*Dr. Voss:* \"Every signal through the Junction has to be routed onto the right "
+           "distribution track, or the switching system misfires downstream. Match each situation to "
+           "the distribution that actually generates it.\"",
+        4: "*Dr. Voss:* \"The Terminal's arrival boards run on a Poisson process, and the gaps between "
+           "arrivals follow a distribution of their own. Mix the two up and every schedule downstream "
+           "falls apart.\"",
+        5: "*Dr. Voss:* \"This is it, Cadet. The Variance Wraith at the Core isn't a bug to patch — "
+           "it's irreducible randomness. You won't delete it. You'll contain it, by running enough "
+           "simulations to know its behavior cold.\"",
+    },
+    "epilogue": (
+        "With the Core recalibrated, the Grid's readings settle. The Variance Wraith doesn't "
+        "vanish — it never will — but it's contained now, predictable within limits you understand. "
+        "Dr. Voss signs off on your certification: **Analytika Guild, Full Data Cadet.**"
+    ),
+}
 
 YOUTUBE_RESOURCES = {
     "home": [
@@ -380,15 +559,21 @@ def show_youtube_resources(section_key):
     resources = YOUTUBE_RESOURCES.get(section_key, [])
     if not resources:
         return
-    with st.expander("📺 Notebook YouTube resources", expanded=False):
-        for title, url in resources:
-            st.markdown(f"**{title}**")
-            st.video(url)
+    st.subheader("📺 Notebook YouTube resources")
+    for title, url in resources:
+        st.markdown(f"**{title}**")
+        st.video(url)
 
 def go_to_next_page():
     current = st.session_state.get("selected_page", PAGE_OPTIONS[0])
     current_index = PAGE_OPTIONS.index(current) if current in PAGE_OPTIONS else 0
     next_page = PAGE_OPTIONS[(current_index + 1) % len(PAGE_OPTIONS)]
+    if current == "🧭 Diagnostic Check-In" and not assessment_complete(st.session_state.pid, "pre"):
+        set_answer_feedback("warning", "Answer all 5 baseline questions before heading out.")
+        return
+    if current == "📊 Mastery Check-Out" and not assessment_complete(st.session_state.pid, "post"):
+        set_answer_feedback("warning", "Answer all 5 check-out questions before moving on.")
+        return
     current_level = PAGE_LEVELS.get(current)
     if current_level and not level_complete(st.session_state.pid, current_level):
         answered, total, pending = level_progress(st.session_state.pid, current_level)
@@ -416,11 +601,11 @@ def boss_defeated_percent(xp):
 
 def show_boss_progress(xp):
     defeated = boss_defeated_percent(xp)
-    st.progress(min(1.0, xp / PERFECT_SCORE), text=f"Boss defeated: {defeated}%")
+    st.progress(min(1.0, xp / PERFECT_SCORE), text=f"Variance Wraith contained: {defeated}%")
     if xp >= PERFECT_SCORE:
-        st.success(f"👑 Perfect score: {xp}/{PERFECT_SCORE} XP. You defeated the Monte Carlo Boss!")
+        st.success(f"👑 Perfect score: {xp}/{PERFECT_SCORE} XP. The Variance Wraith is fully contained — the Grid is stable!")
     else:
-        st.info(f"Boss defeated: {defeated}% ({xp}/{PERFECT_SCORE} XP). A perfect score defeats the boss.")
+        st.info(f"Variance Wraith contained: {defeated}% ({xp}/{PERFECT_SCORE} XP). A perfect score fully contains it.")
 
 def correct_challenges(pid):
     history = participant_stats(pid)
@@ -452,24 +637,35 @@ def first_incomplete_level(pid):
     return None
 
 def first_incomplete_page(pid):
+    if not assessment_complete(pid, "pre"):
+        return "🧭 Diagnostic Check-In"
     level = first_incomplete_level(pid)
     if level is None:
-        return "🥇 Leaderboard"
+        return "📊 Mastery Check-Out" if not assessment_complete(pid, "post") else "🥇 Leaderboard"
     for page, page_level in PAGE_LEVELS.items():
         if page_level == level:
             return page
     return "🏠 Home"
 
 def page_accessible(pid, page):
+    if page == "🧭 Diagnostic Check-In":
+        return True
+    if not assessment_complete(pid, "pre"):
+        return False  # the baseline check-in comes before everything else
     level = PAGE_LEVELS.get(page)
-    if level is None:
-        return page == "🏠 Home" or first_incomplete_level(pid) is None
-    return all(level_complete(pid, earlier) for earlier in range(1, level))
+    if level is not None:
+        return all(level_complete(pid, earlier) for earlier in range(1, level))
+    if page == "📊 Mastery Check-Out":
+        return level_complete(pid, 5)
+    return page == "🏠 Home" or first_incomplete_level(pid) is None
 
 def enforce_page_access(pid):
+    """Must be called before the `selected_page`-keyed radio widget is
+    instantiated this run — Streamlit forbids writing to a widget's bound
+    session_state key after that widget has already rendered in the same run."""
     selected_page = st.session_state.get("selected_page", PAGE_OPTIONS[0])
     if page_accessible(pid, selected_page):
-        return selected_page
+        return
     fallback = first_incomplete_page(pid)
     st.session_state.selected_page = fallback
     set_answer_feedback("warning", "You need to answer all earlier level questions correctly before moving ahead.")
@@ -530,8 +726,8 @@ BADGE_DESCRIPTIONS = [
     ("⭐ Stats Explorer", "50-109 XP", "Understands center and is beginning to reason about variability."),
     ("🥉 Variability Scout", "110-179 XP", "Can compare spread and recognize how distributions shape simulations."),
     ("🥈 Distribution Strategist", "180-249 XP", "Can connect probability distributions to modeling situations."),
-    ("🥇 Monte Carlo Master", "250-504 XP", "Can reason through simulation uncertainty and boss-level Monte Carlo concepts."),
-    ("👑 Simulation Champion", f"{PERFECT_SCORE} XP", "Perfect cumulative score; the Monte Carlo Boss is fully defeated."),
+    ("🥇 Monte Carlo Master", "250-504 XP", "Can reason through simulation uncertainty and Control Core-level Monte Carlo concepts."),
+    ("👑 Simulation Champion", f"{PERFECT_SCORE} XP", "Perfect cumulative score; the Variance Wraith is fully contained."),
 ]
 
 CONSOLATION_FRACTION = 0.5  # XP fraction awarded for a correct answer on the final attempt
@@ -614,7 +810,7 @@ for key, default in {
     if key not in st.session_state:
         st.session_state[key] = default
 
-conn().close()
+_ensure_schema()
 
 if not st.session_state.logged:
     st.markdown('<div class="game-title">🎮 StatsQuest</div>', unsafe_allow_html=True)
@@ -623,6 +819,8 @@ if not st.session_state.logged:
         unsafe_allow_html=True
     )
 
+    st.markdown(STORY["intro"])
+
     st.info(
         "This is an individual challenge. Enter your name and choose a 4-digit PIN — "
         "use the same name + PIN next time to resume your progress. Keep your PIN "
@@ -630,11 +828,11 @@ if not st.session_state.logged:
     )
 
     c1, c2 = st.columns(2)
-    first = c1.text_input("First name", placeholder="Ada")
-    last = c2.text_input("Last name", placeholder="Lovelace")
+    first = c1.text_input("First name", placeholder="Joe")
+    last = c2.text_input("Last name", placeholder="Smith")
     pin = st.text_input("Choose a 4-digit PIN", placeholder="1234", max_chars=4, type="password")
 
-    if st.button("🚀 Enter StatsQuest", type="primary", use_container_width=True):
+    if st.button("🚀 Enter StatsQuest", type="primary", width="stretch"):
         if not first.strip() or not last.strip():
             st.warning("Enter your first and last name.")
         elif not pin.strip().isdigit() or len(pin.strip()) != 4:
@@ -678,7 +876,7 @@ if st.session_state.is_admin:
     if board.empty:
         st.info("No participants yet.")
     else:
-        st.dataframe(board, hide_index=True, use_container_width=True)
+        st.dataframe(board, hide_index=True, width="stretch")
         st.download_button(
             "⬇️ Download leaderboard (CSV)",
             board.to_csv(index=False).encode("utf-8"),
@@ -689,7 +887,7 @@ if st.session_state.is_admin:
     st.subheader("📜 Full attempt log")
     c = conn()
     log = pd.read_sql_query("""
-        SELECT p.first_name || ' ' || p.last_name AS Name,
+        SELECT p.first_name || ' ' || p.last_name AS "Name",
                a.level, a.challenge, a.answer, a.correct, a.points, a.created_at
         FROM challenge_attempts a
         JOIN participants p ON p.pid = a.pid
@@ -699,13 +897,29 @@ if st.session_state.is_admin:
     if log.empty:
         st.info("No attempts recorded yet.")
     else:
-        st.dataframe(log, hide_index=True, use_container_width=True)
+        st.dataframe(log, hide_index=True, width="stretch")
         st.download_button(
             "⬇️ Download attempt log (CSV)",
             log.to_csv(index=False).encode("utf-8"),
             "statsquest_attempts.csv",
             "text/csv",
         )
+
+    st.subheader("📈 Pre/post learning check")
+    diag = log[log["challenge"].str.startswith(("PRE_", "POST_"))].copy() if not log.empty else log
+    if diag.empty:
+        st.info("No baseline or check-out responses recorded yet.")
+    else:
+        diag["Phase"] = diag["challenge"].str.split("_").str[0].map({"PRE": "Baseline correct", "POST": "Check-out correct"})
+        summary = (
+            diag[diag["correct"] == 1]
+            .groupby(["Name", "Phase"])["challenge"]
+            .nunique()
+            .unstack(fill_value=0)
+            .reindex(columns=["Baseline correct", "Check-out correct"], fill_value=0)
+        )
+        summary["Change"] = summary["Check-out correct"] - summary["Baseline correct"]
+        st.dataframe(summary.reset_index(), hide_index=True, width="stretch")
 
     st.stop()
 
@@ -721,12 +935,13 @@ with st.sidebar:
     st.metric("Total XP", f"{xp}/{PERFECT_SCORE}")
     st.write(badge)
 
+    enforce_page_access(pid)  # may correct/rerun before the widget below is instantiated
+
     selected = st.radio(
         "Game map",
         PAGE_OPTIONS,
         key="selected_page",
     )
-    selected = enforce_page_access(pid)
 
     st.divider()
     if st.button("Log out"):
@@ -748,20 +963,48 @@ if not board.empty:
     pid_list = board["PID"].tolist()
     if pid in pid_list:
         rank = int(board["Rank"].tolist()[pid_list.index(pid)])
-m3.metric("Boss Defeated", f"{boss_defeated_percent(xp)}%")
+m3.metric("Wraith Contained", f"{boss_defeated_percent(xp)}%")
 m4.metric("Class Rank", f"#{rank}" if rank != "—" else "—")
 
 show_answer_feedback()
 
 # -----------------------------
+# Pre-assessment (Diagnostic Check-In)
+# -----------------------------
+if selected == "🧭 Diagnostic Check-In":
+    st.header("🧭 Diagnostic Check-In")
+    st.markdown(STORY["pre_assessment"])
+
+    if assessment_complete(pid, "pre"):
+        pre_correct, pre_total = assessment_score(pid, "pre")
+        st.success(f"Baseline recorded: {pre_correct}/{pre_total} correct before training.")
+        st.caption("This didn't affect your XP — it just gives us something to compare against once you finish.")
+    else:
+        st.info(
+            "Answer these 5 quick questions before you head out to Meanhaven Station. "
+            "They're ungraded and won't affect your XP — they just set your starting point."
+        )
+        with st.form("pre_assessment_form"):
+            pre_answers = {}
+            for key, prompt, options, _ in ASSESSMENT_QUESTIONS:
+                pre_answers[key] = st.radio(prompt, options, key=f"pre_{key}", index=None)
+            pre_submitted = st.form_submit_button("Submit baseline check-in", type="primary")
+        if pre_submitted:
+            if any(value is None for value in pre_answers.values()):
+                st.warning("Answer all 5 questions before submitting.")
+            else:
+                for key, _, _, correct_answer in ASSESSMENT_QUESTIONS:
+                    record_diagnostic_answer(pid, "pre", key, pre_answers[key], pre_answers[key] == correct_answer)
+                set_answer_feedback("success", "Baseline check-in recorded. Good luck out there, Cadet.")
+                st.rerun()
+    show_next_button()
+
+# -----------------------------
 # Home / map
 # -----------------------------
-if selected == "🏠 Home":
+elif selected == "🏠 Home":
     st.header("🗺️ Game Map")
-    st.write(
-        "Complete challenges to earn XP. Each level is based directly on the statistics topics "
-        "from your Modeling & Simulation notebook."
-    )
+    st.markdown(STORY["intro"])
     show_youtube_resources("home")
 
     for level, info in LEVELS.items():
@@ -788,22 +1031,28 @@ if selected == "🏠 Home":
     st.subheader("Mission")
     st.write(
         "You must understand center, variability, probability distributions, "
-        "arrival processes, and Monte Carlo simulation before defeating the final boss."
+        "arrival processes, and Monte Carlo simulation before you can contain the Variance Wraith "
+        "at the Control Core. Each level is based directly on the statistics topics from your "
+        "Modeling & Simulation notebook."
     )
+    if assessment_complete(pid, "pre"):
+        pre_correct, pre_total = assessment_score(pid, "pre")
+        st.caption(f"📈 Baseline check-in: {pre_correct}/{pre_total} correct before training.")
 
     st.subheader("Badges")
     badge_df = pd.DataFrame(
         BADGE_DESCRIPTIONS,
         columns=["Badge", "Score needed", "What it means"],
     )
-    st.dataframe(badge_df, hide_index=True, use_container_width=True)
+    st.dataframe(badge_df, hide_index=True, width="stretch")
     show_next_button()
 
 # -----------------------------
 # Level 1
 # -----------------------------
-elif selected == "🎯 Level 1 — Center Stage":
-    st.header("🎯 Level 1 — Center Stage")
+elif selected == "🎯 Level 1 — Meanhaven Station":
+    st.header("🎯 Level 1 — Meanhaven Station")
+    st.markdown(STORY["levels"][1])
     show_level_progress(pid, 1)
     st.write("Dataset from the notebook: student commute times.")
     show_youtube_resources("level_1")
@@ -867,8 +1116,9 @@ elif selected == "🎯 Level 1 — Center Stage":
 # -----------------------------
 # Level 2
 # -----------------------------
-elif selected == "📏 Level 2 — Spread Detective":
-    st.header("📏 Level 2 — Spread Detective")
+elif selected == "📏 Level 2 — Spreadmoor Yards":
+    st.header("📏 Level 2 — Spreadmoor Yards")
+    st.markdown(STORY["levels"][2])
     show_level_progress(pid, 2)
     show_youtube_resources("level_2")
     machine_a = np.array([9.9,10.0,10.0,10.0,10.1])
@@ -879,7 +1129,7 @@ elif selected == "📏 Level 2 — Spread Detective":
         "Mean":[machine_a.mean(),machine_b.mean()],
         "Sample SD":[machine_a.std(ddof=1),machine_b.std(ddof=1)]
     })
-    st.dataframe(df, hide_index=True, use_container_width=True)
+    st.dataframe(df, hide_index=True, width="stretch")
 
     q = st.radio(
         "Both machines have the same mean. Which machine is more consistent?",
@@ -931,10 +1181,11 @@ elif selected == "📏 Level 2 — Spread Detective":
 # -----------------------------
 # Level 3
 # -----------------------------
-elif selected == "🎲 Level 3 — Distribution Dungeon":
-    st.header("🎲 Level 3 — Distribution Dungeon")
+elif selected == "🎲 Level 3 — Distribution Junction":
+    st.header("🎲 Level 3 — Distribution Junction")
+    st.markdown(STORY["levels"][3])
     show_level_progress(pid, 3)
-    st.write("Match each simulation situation to a probability distribution.")
+    st.write("Route each simulation situation onto the distribution that actually generates it.")
     show_youtube_resources("level_3")
 
     questions = [
@@ -955,20 +1206,20 @@ elif selected == "🎲 Level 3 — Distribution Dungeon":
     }
 
     for i,(cid,prompt,opts,correct) in enumerate(questions,1):
-        st.markdown(f"**Dungeon Door {i}:** {prompt}")
+        st.markdown(f"**Junction Track {i}:** {prompt}")
         ans = st.radio("Choose:", opts, key=cid)
-        if st.button("Open door", key=f"{cid}_submit"):
+        if st.button("Route signal", key=f"{cid}_submit"):
             score_answer(
                 pid,3,cid,ans,ans==correct,20,
                 correct_answer=correct,
                 explanation=distribution_explanations[cid],
             )
 
-    st.subheader("🎁 Bonus Door — Make-Up XP")
-    st.caption("Needed a retry on one of the doors above? Open this one for a chance to earn the XP back.")
-    st.markdown("**Bonus Door:** The time between machine breakdowns is continuous and memoryless.")
+    st.subheader("🎁 Bonus Track — Make-Up XP")
+    st.caption("Needed a retry on one of the tracks above? Route this one for a chance to earn the XP back.")
+    st.markdown("**Bonus Track:** The time between machine breakdowns is continuous and memoryless.")
     ans5 = st.radio("Choose:", ["Exponential","Binomial","Uniform"], key="L3_BONUS")
-    if st.button("Open door", key="L3_BONUS_submit"):
+    if st.button("Route signal", key="L3_BONUS_submit"):
         score_answer(
             pid,3,"L3_BONUS",ans5,ans5=="Exponential",20,
             correct_answer="Exponential",
@@ -979,8 +1230,9 @@ elif selected == "🎲 Level 3 — Distribution Dungeon":
 # -----------------------------
 # Level 4
 # -----------------------------
-elif selected == "✈️ Level 4 — Arrival Arena":
-    st.header("✈️ Level 4 — Arrival Arena")
+elif selected == "✈️ Level 4 — Arrivals Terminal":
+    st.header("✈️ Level 4 — Arrivals Terminal")
+    st.markdown(STORY["levels"][4])
     show_level_progress(pid, 4)
     st.write(
         "The notebook connects Poisson event counts with Exponential interarrival times."
@@ -1038,8 +1290,9 @@ elif selected == "✈️ Level 4 — Arrival Arena":
 # -----------------------------
 # Level 5
 # -----------------------------
-elif selected == "🏆 Level 5 — Monte Carlo Boss":
-    st.header("🏆 Level 5 — Monte Carlo Boss")
+elif selected == "🏆 Level 5 — Control Core":
+    st.header("🏆 Level 5 — Control Core")
+    st.markdown(STORY["levels"][5])
     show_level_progress(pid, 5)
     st.write(
         "Airport security workload: passenger count is Poisson and each passenger's "
@@ -1079,7 +1332,7 @@ elif selected == "🏆 Level 5 — Monte Carlo Boss":
         ],
         key="l5q1"
     )
-    if st.button("Attack boss", key="l5submit1"):
+    if st.button("Engage the Wraith", key="l5submit1"):
         score_answer(
             pid,5,"L5_STABILITY",q1,
             q1=="It generally becomes more stable",45,
@@ -1096,7 +1349,7 @@ elif selected == "🏆 Level 5 — Monte Carlo Boss":
         ],
         key="l5q2"
     )
-    if st.button("Final strike", key="l5submit2"):
+    if st.button("Final containment strike", key="l5submit2"):
         score_answer(
             pid,5,"L5_PURPOSE",q2,
             q2=="To study the range and likelihood of possible outcomes",45,
@@ -1115,7 +1368,7 @@ elif selected == "🏆 Level 5 — Monte Carlo Boss":
         ],
         key="l5q3"
     )
-    if st.button("Bonus strike", key="l5submit3"):
+    if st.button("Bonus containment strike", key="l5submit3"):
         score_answer(
             pid,5,"L5_BONUS",q3,
             q3=="A method to get more precise estimates with fewer runs",45,
@@ -1124,6 +1377,44 @@ elif selected == "🏆 Level 5 — Monte Carlo Boss":
         )
 
     show_boss_progress(xp)
+    if xp >= PERFECT_SCORE:
+        st.markdown(STORY["epilogue"])
+    show_next_button()
+
+# -----------------------------
+# Post-assessment (Mastery Check-Out)
+# -----------------------------
+elif selected == "📊 Mastery Check-Out":
+    st.header("📊 Mastery Check-Out")
+    st.markdown(STORY["post_assessment"])
+
+    if assessment_complete(pid, "post"):
+        post_correct, post_total = assessment_score(pid, "post")
+        pre_correct, pre_total = assessment_score(pid, "pre")
+        st.success(f"Check-out recorded: {post_correct}/{post_total} correct.")
+        gain = post_correct - pre_correct
+        a, b, c = st.columns(3)
+        a.metric("Baseline", f"{pre_correct}/{pre_total}")
+        b.metric("Check-out", f"{post_correct}/{post_total}")
+        c.metric("Change", f"+{gain}" if gain >= 0 else str(gain))
+    else:
+        st.info(
+            "Same five questions as your baseline check-in — answer them again now that "
+            "you've cleared every station. Still ungraded and won't affect your XP."
+        )
+        with st.form("post_assessment_form"):
+            post_answers = {}
+            for key, prompt, options, _ in ASSESSMENT_QUESTIONS:
+                post_answers[key] = st.radio(prompt, options, key=f"post_{key}", index=None)
+            post_submitted = st.form_submit_button("Submit check-out", type="primary")
+        if post_submitted:
+            if any(value is None for value in post_answers.values()):
+                st.warning("Answer all 5 questions before submitting.")
+            else:
+                for key, _, _, correct_answer in ASSESSMENT_QUESTIONS:
+                    record_diagnostic_answer(pid, "post", key, post_answers[key], post_answers[key] == correct_answer)
+                set_answer_feedback("success", "Check-out recorded. Here's how far you've come.")
+                st.rerun()
     show_next_button()
 
 # -----------------------------
@@ -1135,7 +1426,7 @@ elif selected == "🥇 Leaderboard":
     if board.empty:
         st.info("No scores yet.")
     else:
-        st.dataframe(board.drop(columns=["PID"]), hide_index=True, use_container_width=True)
+        st.dataframe(board.drop(columns=["PID"]), hide_index=True, width="stretch")
         top = board.iloc[0]
         st.success(f"Current leader: {top['Name']} with {int(top['XP'])} XP")
 
@@ -1147,6 +1438,6 @@ elif selected == "🥇 Leaderboard":
         st.dataframe(
             history[["level","challenge","correct","points","created_at"]],
             hide_index=True,
-            use_container_width=True
+            width="stretch"
         )
     show_next_button()
