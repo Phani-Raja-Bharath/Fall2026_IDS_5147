@@ -139,14 +139,10 @@ div[data-testid="stDownloadButton"] > button[kind="primary"]:hover {
 
     .mobile-topbar {
         display: block;
-        position: sticky;
-        top: 0;
-        z-index: 999;
         margin: -.75rem -.75rem .85rem;
         padding: .65rem .75rem;
         background: rgba(255,255,255,.98);
         border-bottom: 1px solid var(--statsquest-card-border);
-        box-shadow: 0 1px 8px rgba(15,23,42,.08);
     }
 
     .mobile-topbar-title {
@@ -1118,15 +1114,6 @@ for key, default in {
 _ensure_schema()
 
 if not st.session_state.logged:
-    st.markdown(
-        """
-        <div class="mobile-topbar">
-            <div class="mobile-topbar-title">🎮 StatsQuest</div>
-            <div class="mobile-topbar-meta">Start screen · Modeling & Simulation</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
     st.markdown('<div class="game-title">🎮 StatsQuest</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="game-subtitle">An individual statistics self-assessment for Modeling & Simulation</div>',
