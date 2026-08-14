@@ -24,7 +24,9 @@ def get_secret(name):
         return None
 
 DATABASE_URL = get_secret("DATABASE_URL") or get_secret("NEON_DATABASE_URL")
-ADMIN_PASSWORD = get_secret("STATSQUEST_ADMIN_PASSWORD") or "changeme123"
+_ADMIN_PASSWORD_SECRET = get_secret("STATSQUEST_ADMIN_PASSWORD")
+ADMIN_PASSWORD = _ADMIN_PASSWORD_SECRET or "changeme123"
+ADMIN_PASSWORD_IS_DEFAULT = not _ADMIN_PASSWORD_SECRET
 USE_POSTGRES = bool(DATABASE_URL)
 
 st.set_page_config(
@@ -66,6 +68,7 @@ st.markdown("""
 
 .mobile-topbar {
     display: none;
+    color: #111827;
 }
 
 .level-card {
@@ -195,6 +198,17 @@ div[data-testid="stDownloadButton"] > button[kind="primary"]:hover {
         max-width: 100%;
     }
 }
+
+@media (max-width: 700px) and (prefers-color-scheme: dark) {
+    .mobile-topbar {
+        background: rgba(17,24,39,.98);
+        color: #f9fafb;
+    }
+
+    .mobile-topbar-meta {
+        color: #d1d5db;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -224,23 +238,64 @@ class DBConnection:
         self._lock = lock
         self._pool = pool
 
+    def _replace_postgres_connection(self):
+        if self._pool is None:
+            return False
+        try:
+            self._pool.putconn(self._raw, close=True)
+        except Exception:
+            pass
+        self._raw = self._pool.getconn()
+        return True
+
+    def _is_postgres_connection_error(self, error):
+        if self._pool is None:
+            return False
+        import psycopg2
+        return isinstance(error, (psycopg2.OperationalError, psycopg2.InterfaceError))
+
     def execute(self, query, params=None):
         if self._lock is not None:
             with self._lock:
                 return self._raw.execute(query, params or ())
-        cursor = self._raw.cursor()
-        cursor.execute(query, params or ())
-        return cursor
+        try:
+            cursor = self._raw.cursor()
+            cursor.execute(query, params or ())
+            return cursor
+        except Exception as error:
+            if not self._is_postgres_connection_error(error):
+                raise
+            self._replace_postgres_connection()
+            cursor = self._raw.cursor()
+            cursor.execute(query, params or ())
+            return cursor
 
     def cursor(self):
         return self._raw.cursor()
+
+    def read_sql(self, query, params=None):
+        """pandas.read_sql_query, but routed through the same write lock as
+        execute()/commit(). pandas drives a non-SQLAlchemy connection via its
+        own .cursor()/.execute() calls, which would otherwise bypass the lock
+        entirely and let reads interleave with writes on the one shared
+        SQLite connection."""
+        if self._lock is not None:
+            with self._lock:
+                return pd.read_sql_query(query, self._raw, params=params)
+        return pd.read_sql_query(query, self._raw, params=params)
 
     def commit(self):
         if self._lock is not None:
             with self._lock:
                 self._raw.commit()
         else:
-            self._raw.commit()
+            try:
+                self._raw.commit()
+            except Exception as error:
+                if not self._is_postgres_connection_error(error):
+                    raise
+                self._replace_postgres_connection()
+                raise RuntimeError("Database connection was reset before commit. Please submit again.") from error
 
     def close(self):
         if self._pool is not None:
@@ -260,12 +315,22 @@ def _postgres_pool():
     """A small connection pool shared for the app's lifetime instead of
     opening a new network connection to Postgres on every helper call."""
     from psycopg2.pool import ThreadedConnectionPool
-    return ThreadedConnectionPool(1, 10, DATABASE_URL)
+    return ThreadedConnectionPool(
+        1,
+        10,
+        DATABASE_URL,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=5,
+    )
 
 def conn():
     if USE_POSTGRES:
         pool = _postgres_pool()
-        return DBConnection(pool.getconn(), pool=pool)
+        db = DBConnection(pool.getconn(), pool=pool)
+        db.execute("SELECT 1")
+        return db
     return DBConnection(_sqlite_connection(), lock=_sqlite_write_lock)
 
 @st.cache_resource(show_spinner=False)
@@ -308,12 +373,37 @@ def _ensure_schema():
         )
         """,
     ))
+    # Guards against a race where two near-simultaneous submits (e.g. a fast
+    # double-click) both pass the "not yet scored" check in score_answer()
+    # before either has committed: only one row per (pid, challenge) is
+    # allowed to have correct=1, so a second concurrent "correct" insert is
+    # rejected by the database instead of silently doubling the XP.
+    try:
+        c.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_one_correct_per_challenge
+            ON challenge_attempts(pid, challenge)
+            WHERE correct = 1
+        """)
+    except Exception:
+        pass  # pre-existing duplicate data (from before this guard existed) would block index creation
     c.commit()
     c.close()
     return True
 
 def make_pid(first, last, pin):
     return f"{first.strip().lower()}|{last.strip().lower()}|{pin.strip()}"
+
+def find_participant_pid_by_name(first, last):
+    """Return the pid already registered under this name (any PIN), or None.
+    Used to catch a mistyped PIN before it silently creates a duplicate,
+    zero-XP identity for a returning student."""
+    c = conn()
+    row = c.execute(
+        sql("SELECT pid FROM participants WHERE LOWER(first_name)=? AND LOWER(last_name)=?"),
+        (first.strip().lower(), last.strip().lower())
+    ).fetchone()
+    c.close()
+    return row[0] if row else None
 
 def register_participant(first, last, pin):
     """Create (or resume) a participant identified by name + PIN. Returns (pid, first_name, last_name)."""
@@ -333,25 +423,47 @@ def register_participant(first, last, pin):
     c.close()
     return pid, first.strip(), last.strip()
 
+def _is_duplicate_correct_attempt(error):
+    """True if `error` is the unique-constraint violation from
+    idx_one_correct_per_challenge (i.e. this challenge was already scored by
+    a concurrent request), for either backend."""
+    if isinstance(error, sqlite3.IntegrityError):
+        return True
+    if USE_POSTGRES:
+        import psycopg2
+        if isinstance(error, psycopg2.IntegrityError):
+            return True
+    return False
+
 def add_attempt(pid, level, challenge, answer, correct, points):
+    """Records an attempt. Returns False (instead of raising) if a
+    concurrent request already recorded a correct answer for this
+    (pid, challenge) first — see idx_one_correct_per_challenge."""
     c = conn()
-    c.execute(
-        sql("""INSERT INTO challenge_attempts(pid,level,challenge,answer,correct,points,created_at)
-           VALUES(?,?,?,?,?,?,?)"""),
-        (
-            pid, level, challenge, str(answer),
-            1 if correct else 0, int(points),
-            datetime.now().isoformat(timespec="seconds")
+    try:
+        c.execute(
+            sql("""INSERT INTO challenge_attempts(pid,level,challenge,answer,correct,points,created_at)
+               VALUES(?,?,?,?,?,?,?)"""),
+            (
+                pid, level, challenge, str(answer),
+                1 if correct else 0, int(points),
+                datetime.now().isoformat(timespec="seconds")
+            )
         )
-    )
-    c.commit()
-    c.close()
+        c.commit()
+    except Exception as error:
+        if correct and _is_duplicate_correct_attempt(error):
+            return False
+        raise
+    finally:
+        c.close()
+    return True
 
 def participant_stats(pid):
     c = conn()
-    df = pd.read_sql_query(
+    df = c.read_sql(
         sql("SELECT * FROM challenge_attempts WHERE pid=? ORDER BY id"),
-        c, params=(pid,)
+        params=(pid,)
     )
     c.close()
     return df
@@ -362,7 +474,7 @@ def leaderboard():
     # aliases (e.g. `AS PID`) get silently folded to lowercase on Postgres (but
     # not SQLite), which broke every `board["PID"]`-style lookup below whenever
     # the app ran against Postgres instead of the local SQLite file.
-    df = pd.read_sql_query("""
+    df = c.read_sql("""
         SELECT p.pid AS "PID",
                p.first_name || ' ' || p.last_name AS "Name",
                COALESCE(SUM(a.points),0) AS "XP",
@@ -372,7 +484,7 @@ def leaderboard():
         LEFT JOIN challenge_attempts a ON a.pid=p.pid
         GROUP BY p.pid
         ORDER BY "XP" DESC, "Correct" DESC, "Attempts" ASC
-    """, c)
+    """)
     c.close()
     if not df.empty:
         df.insert(0, "Rank", range(1, len(df)+1))
@@ -382,11 +494,11 @@ def level_score(pid, level):
     df = participant_stats(pid)
     if df.empty:
         return 0
-    return int(df.loc[df.level == level, "points"].sum())
+    return int(df[df["level"] == level]["points"].sum())
 
 def total_xp(pid):
     df = participant_stats(pid)
-    return 0 if df.empty else int(df.points.sum())
+    return 0 if df.empty else int(df["points"].sum())
 
 MAX_WRONG_ATTEMPTS = 2  # wrong tries allowed before the answer is revealed and the challenge locks
 
@@ -394,7 +506,7 @@ def challenge_history(pid, challenge):
     df = participant_stats(pid)
     if df.empty:
         return df
-    return df[df.challenge == challenge]
+    return df[df["challenge"] == challenge]
 
 # -----------------------------
 # Pre/post learning assessment
@@ -488,6 +600,16 @@ LEVEL_CHALLENGES = {
     3: ["L3_Q1", "L3_Q2", "L3_Q3", "L3_Q4", "L3_BONUS"],
     4: ["L4_POISSON", "L4_EXP", "L4_BONUS"],
     5: ["L5_STABILITY", "L5_PURPOSE", "L5_BONUS"],
+}
+
+# The "*_BONUS" challenge in each level is presented to players as optional
+# make-up credit, not a requirement — so it's excluded from what gates level
+# completion / page progression. LEVEL_CHALLENGES (above) still lists it,
+# since it's still scoreable and still counts toward LEVEL_MAX_POINTS /
+# PERFECT_SCORE for players going for a perfect run.
+LEVEL_REQUIRED_CHALLENGES = {
+    level: [c for c in challenges if not c.endswith("_BONUS")]
+    for level, challenges in LEVEL_CHALLENGES.items()
 }
 
 CHALLENGE_NAMES = {
@@ -619,7 +741,9 @@ def show_youtube_resources(section_key):
 def go_to_next_page():
     current = st.session_state.get("selected_page", PAGE_OPTIONS[0])
     current_index = PAGE_OPTIONS.index(current) if current in PAGE_OPTIONS else 0
-    next_page = PAGE_OPTIONS[(current_index + 1) % len(PAGE_OPTIONS)]
+    if current_index >= len(PAGE_OPTIONS) - 1:
+        return
+    next_page = PAGE_OPTIONS[current_index + 1]
     if current == "🧭 Diagnostic Check-In" and not assessment_complete(st.session_state.pid, "pre"):
         set_answer_feedback("warning", "Answer all 5 baseline questions before heading out.")
         return
@@ -639,12 +763,15 @@ def go_to_next_page():
         st.session_state.selected_page = first_incomplete
         set_answer_feedback("warning", "You need to answer all earlier level questions correctly before moving ahead.")
         return
+    st.session_state.answer_feedback = None
     st.session_state.selected_page = next_page
 
 def show_next_button():
     current = st.session_state.get("selected_page", PAGE_OPTIONS[0])
     current_index = PAGE_OPTIONS.index(current) if current in PAGE_OPTIONS else 0
-    next_page = PAGE_OPTIONS[(current_index + 1) % len(PAGE_OPTIONS)]
+    if current_index >= len(PAGE_OPTIONS) - 1:
+        return
+    next_page = PAGE_OPTIONS[current_index + 1]
     st.divider()
     st.button(f"Next: {next_page}", type="primary", on_click=go_to_next_page)
 
@@ -663,19 +790,49 @@ def correct_challenges(pid):
     history = participant_stats(pid)
     if history.empty:
         return set()
-    return set(history.loc[history["correct"] == 1, "challenge"].tolist())
+    return set(history[history["correct"] == 1]["challenge"].tolist())
 
 def level_progress(pid, level):
-    required = LEVEL_CHALLENGES[level]
+    """Progress against the level's REQUIRED challenges only — the bonus
+    challenge is optional make-up credit and doesn't gate completion."""
+    required = LEVEL_REQUIRED_CHALLENGES[level]
     correct = correct_challenges(pid)
     answered = [challenge for challenge in required if challenge in correct]
     pending = [challenge for challenge in required if challenge not in correct]
     return len(answered), len(required), pending
 
-def challenge_label(challenge):
+def level_bonus_challenge(level):
+    """The single optional bonus challenge id for a level, or None."""
+    required = set(LEVEL_REQUIRED_CHALLENGES[level])
+    bonus_ids = [c for c in LEVEL_CHALLENGES[level] if c not in required]
+    return bonus_ids[0] if bonus_ids else None
+
+def level_has_wrong_required_attempt(pid, level):
+    """True once the player has gotten at least one required question in
+    this level wrong. The bonus challenge exists to make up for exactly
+    that lost XP, so it only unlocks once there's something to make up."""
+    history = participant_stats(pid)
+    if history.empty:
+        return False
+    required = set(LEVEL_REQUIRED_CHALLENGES[level])
+    wrong = history[history["challenge"].isin(required) & (history["correct"] == 0)]
+    return not wrong.empty
+
+def bonus_unlocked(pid, level):
+    """Unlocked once a required question in this level has been missed, or
+    once the bonus itself already has an attempt on record (so it doesn't
+    vanish mid-attempt if later required answers all end up correct)."""
+    bonus_id = level_bonus_challenge(level)
+    if bonus_id is None:
+        return False
+    if level_has_wrong_required_attempt(pid, level):
+        return True
+    return not challenge_history(pid, bonus_id).empty
+
+def challenge_label(challenge: str) -> str:
     return CHALLENGE_NAMES.get(challenge, challenge)
 
-def challenge_labels(challenges):
+def challenge_labels(challenges) -> str:
     return ", ".join(challenge_label(challenge) for challenge in challenges)
 
 def level_complete(pid, level):
@@ -709,7 +866,9 @@ def page_accessible(pid, page):
         return all(level_complete(pid, earlier) for earlier in range(1, level))
     if page == "📊 Mastery Check-Out":
         return level_complete(pid, 5)
-    return page == "🏠 Home" or first_incomplete_level(pid) is None
+    if page == "🥇 Leaderboard":
+        return first_incomplete_level(pid) is None and assessment_complete(pid, "post")
+    return page == "🏠 Home"
 
 def enforce_page_access(pid):
     """Must be called before the `selected_page`-keyed radio widget is
@@ -724,7 +883,7 @@ def enforce_page_access(pid):
     st.rerun()
 
 def show_level_progress(pid, level):
-    required = LEVEL_CHALLENGES[level]
+    required = LEVEL_REQUIRED_CHALLENGES[level]
     correct = correct_challenges(pid)
     answered_items = [challenge for challenge in required if challenge in correct]
     pending = [challenge for challenge in required if challenge not in correct]
@@ -738,13 +897,29 @@ def show_level_progress(pid, level):
     else:
         st.success("Level complete. You can move to the next page.")
 
+    bonus_id = level_bonus_challenge(level)
+    if bonus_id:
+        if bonus_id in correct:
+            st.caption(f"🎁 Bonus complete: {challenge_label(bonus_id)} (+XP earned)")
+        elif bonus_unlocked(pid, level):
+            st.caption(f"🎁 Bonus unlocked: {challenge_label(bonus_id)} — a chance to earn back the XP you missed.")
+        else:
+            st.caption(f"🎁 Bonus challenge locked — it unlocks if you miss a question above.")
+
 def set_answer_feedback(kind, message, balloons=False):
-    st.session_state.answer_feedback = {"kind": kind, "message": message}
+    st.session_state.answer_feedback = {
+        "kind": kind,
+        "message": message,
+        "page": st.session_state.get("selected_page"),
+    }
     st.session_state.show_balloons = balloons
 
 def show_answer_feedback():
     feedback = st.session_state.get("answer_feedback")
     if not feedback:
+        return
+    if feedback.get("page") != st.session_state.get("selected_page"):
+        st.session_state.answer_feedback = None
         return
     kind = feedback.get("kind")
     message = feedback.get("message", "")
@@ -827,26 +1002,22 @@ def score_answer(pid, level, challenge, answer, correct, base=20, correct_answer
     if correct:
         if is_final_attempt:
             points = max(5, int(base * CONSOLATION_FRACTION))
-            add_attempt(pid, level, challenge, answer, True, points)
-            set_answer_feedback(
-                "success",
-                format_correct_feedback(f"✅ Correct answer! +{points} XP (partial credit on your last try)", explanation),
-                balloons=True,
-            )
+            recorded = add_attempt(pid, level, challenge, answer, True, points)
+            success_message = format_correct_feedback(f"✅ Correct answer! +{points} XP (partial credit on your last try)", explanation)
         elif attempt_number > MAX_WRONG_ATTEMPTS:
-            add_attempt(pid, level, challenge, answer, True, 0)
-            set_answer_feedback(
-                "success",
-                format_correct_feedback("✅ Correct answer! No XP because the scoring attempts were already used, but this question is now complete.", explanation),
-                balloons=True,
-            )
+            recorded = add_attempt(pid, level, challenge, answer, True, 0)
+            success_message = format_correct_feedback("✅ Correct answer! No XP because the scoring attempts were already used, but this question is now complete.", explanation)
         else:
-            add_attempt(pid, level, challenge, answer, True, base)
-            set_answer_feedback(
-                "success",
-                format_correct_feedback(f"✅ Correct answer! +{base} XP", explanation),
-                balloons=True,
-            )
+            recorded = add_attempt(pid, level, challenge, answer, True, base)
+            success_message = format_correct_feedback(f"✅ Correct answer! +{base} XP", explanation)
+
+        if recorded:
+            set_answer_feedback("success", success_message, balloons=True)
+        else:
+            # A concurrent submit (e.g. a fast double-click) already scored
+            # this challenge first — idx_one_correct_per_challenge rejected
+            # this insert, so nothing was double-counted.
+            set_answer_feedback("info", "You've already scored this challenge.")
         st.rerun()
     else:
         add_attempt(pid, level, challenge, answer, False, 0)
@@ -915,15 +1086,31 @@ if not st.session_state.logged:
         elif not pin.strip().isdigit() or len(pin.strip()) != 4:
             st.warning("Your PIN must be exactly 4 digits.")
         else:
-            new_pid, fn, ln = register_participant(first, last, pin.strip())
-            st.session_state.pid = new_pid
-            st.session_state.first_name = fn
-            st.session_state.last_name = ln
-            st.session_state.selected_page = first_incomplete_page(new_pid)
-            st.session_state.logged = True
-            st.rerun()
+            candidate_pid = make_pid(first, last, pin.strip())
+            existing_pid = find_participant_pid_by_name(first, last)
+            if existing_pid and existing_pid != candidate_pid:
+                st.error(
+                    "That name is already registered with a different PIN. "
+                    "Enter the PIN you used the first time to resume your progress "
+                    "(if you're a different person with the same name, add a middle "
+                    "initial or ask your instructor for help)."
+                )
+            else:
+                new_pid, fn, ln = register_participant(first, last, pin.strip())
+                st.session_state.pid = new_pid
+                st.session_state.first_name = fn
+                st.session_state.last_name = ln
+                st.session_state.selected_page = first_incomplete_page(new_pid)
+                st.session_state.logged = True
+                st.rerun()
 
     with st.expander("🛠️ Instructor / Admin access"):
+        if ADMIN_PASSWORD_IS_DEFAULT:
+            st.warning(
+                "⚠️ No STATSQUEST_ADMIN_PASSWORD secret is set, so this app is using the "
+                "built-in default admin password. Set that secret before sharing this app "
+                "with students — the admin dashboard shows every participant's data."
+            )
         admin_pw = st.text_input("Admin password", type="password", key="admin_pw_input")
         if st.button("Enter Admin Dashboard"):
             if admin_pw == ADMIN_PASSWORD:
@@ -954,23 +1141,24 @@ if st.session_state.is_admin:
     if board.empty:
         st.info("No participants yet.")
     else:
-        st.dataframe(board, hide_index=True, width="stretch")
+        admin_board = board.drop(columns=["PID"])
+        st.dataframe(admin_board, hide_index=True, width="stretch")
         st.download_button(
             "⬇️ Download leaderboard (CSV)",
-            board.to_csv(index=False).encode("utf-8"),
+            admin_board.to_csv(index=False).encode("utf-8"),
             "statsquest_leaderboard.csv",
             "text/csv",
         )
 
     st.subheader("📜 Full attempt log")
     c = conn()
-    log = pd.read_sql_query("""
+    log = c.read_sql("""
         SELECT p.first_name || ' ' || p.last_name AS "Name",
                a.level, a.challenge, a.answer, a.correct, a.points, a.created_at
         FROM challenge_attempts a
         JOIN participants p ON p.pid = a.pid
         ORDER BY a.created_at
-    """, c)
+    """)
     c.close()
     if log.empty:
         st.info("No attempts recorded yet.")
@@ -1031,9 +1219,46 @@ with st.sidebar:
 # -----------------------------
 if st.session_state.last_selected_page != selected:
     components.html(
-        """
+        f"""
         <script>
-        window.parent.scrollTo({ top: 0, left: 0, behavior: "instant" });
+        const token = {json.dumps(selected)};
+        function scrollStatsQuestToTop() {{
+            const win = window.parent;
+            const doc = win.document;
+            const selectors = [
+                '[data-testid="stAppViewContainer"]',
+                '[data-testid="stMain"]',
+                'section.main',
+                '.main',
+                'body',
+                'html'
+            ];
+
+            try {{
+                win.scrollTo({{ top: 0, left: 0, behavior: "auto" }});
+            }} catch (error) {{}}
+
+            selectors.forEach((selector) => {{
+                const element = doc.querySelector(selector);
+                if (!element) return;
+                try {{
+                    element.scrollTop = 0;
+                    element.scrollLeft = 0;
+                    if (element.scrollTo) {{
+                        element.scrollTo({{ top: 0, left: 0, behavior: "auto" }});
+                    }}
+                }} catch (error) {{}}
+            }});
+        }}
+
+        scrollStatsQuestToTop();
+        const requestFrame = window.parent.requestAnimationFrame || window.requestAnimationFrame;
+        if (requestFrame) {{
+            requestFrame(scrollStatsQuestToTop);
+        }}
+        [50, 150, 350, 700, 1200, 2500].forEach((delay) => {{
+            window.setTimeout(scrollStatsQuestToTop, delay);
+        }});
         </script>
         """,
         height=0,
@@ -1054,7 +1279,7 @@ st.caption("Short statistics challenges with XP, progress, and a leaderboard.")
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("XP", f"{xp}/{PERFECT_SCORE}")
-m2.metric("Badge", badge.split(" ",1)[0], badge.split(" ",1)[1] if " " in badge else "")
+m2.metric("Badge", badge.split(" ",1)[0], badge.split(" ",1)[1] if " " in badge else "", delta_color="off")
 board = leaderboard()
 rank = "—"
 if not board.empty:
@@ -1159,7 +1384,8 @@ elif selected == "🎯 Level 1 — Meanhaven Station":
     c1,c2,c3 = st.columns(3)
     c1.metric("Mean", f"{np.mean(data):.2f}")
     c2.metric("Median", f"{np.median(data):.0f}")
-    c3.metric("Mode", "15")
+    modes = pd.Series(data).mode().tolist()
+    c3.metric("Mode", ", ".join(str(int(m)) for m in modes))
 
     st.subheader("Challenge 1 — Outlier Attack")
     outlier = st.slider("Replace the final commute time with:", 60, 600, 600, 10)
@@ -1195,18 +1421,21 @@ elif selected == "🎯 Level 1 — Meanhaven Station":
         )
 
     st.subheader("🎁 Bonus Challenge — Make-Up XP")
-    st.caption("Needed a retry above? Answer this for a chance to earn the XP back.")
-    q3 = answer_radio(
-        "A dataset is symmetric (bell-shaped) with no outliers. How do its mean and median compare?",
-        ["They are approximately equal","The mean is always much larger","The median is undefined"],
-        key="l1q3"
-    )
-    if st.button("Lock answer", key="l1submit3"):
-        score_answer(
-            pid,1,"L1_BONUS",q3,q3=="They are approximately equal",25,
-            correct_answer="They are approximately equal",
-            explanation="In a symmetric bell-shaped dataset, values balance around the center, so the mean and median usually land close together.",
+    if bonus_unlocked(pid, 1):
+        st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed above.")
+        q3 = answer_radio(
+            "A dataset is symmetric (bell-shaped) with no outliers. How do its mean and median compare?",
+            ["They are approximately equal","The mean is always much larger","The median is undefined"],
+            key="l1q3"
         )
+        if st.button("Lock answer", key="l1submit3"):
+            score_answer(
+                pid,1,"L1_BONUS",q3,q3=="They are approximately equal",25,
+                correct_answer="They are approximately equal",
+                explanation="In a symmetric bell-shaped dataset, values balance around the center, so the mean and median usually land close together.",
+            )
+    else:
+        st.caption("🔒 Unlocks if you miss a question above — it's here to help you make up lost XP.")
     show_next_button()
 
 # -----------------------------
@@ -1260,18 +1489,21 @@ elif selected == "📏 Level 2 — Spreadmoor Yards":
         )
 
     st.subheader("🎁 Bonus Challenge — Make-Up XP")
-    st.caption("Needed a retry above? Answer this for a chance to earn the XP back.")
-    q3 = answer_radio(
-        "Which quantity is the square of the standard deviation?",
-        ["Variance","Mean","Median"],
-        key="l2q3"
-    )
-    if st.button("Lock answer", key="l2submit3"):
-        score_answer(
-            pid,2,"L2_BONUS",q3,q3=="Variance",30,
-            correct_answer="Variance",
-            explanation="Variance is standard deviation squared; standard deviation is the square root of variance.",
+    if bonus_unlocked(pid, 2):
+        st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed above.")
+        q3 = answer_radio(
+            "Which quantity is the square of the standard deviation?",
+            ["Variance","Mean","Median"],
+            key="l2q3"
         )
+        if st.button("Lock answer", key="l2submit3"):
+            score_answer(
+                pid,2,"L2_BONUS",q3,q3=="Variance",30,
+                correct_answer="Variance",
+                explanation="Variance is standard deviation squared; standard deviation is the square root of variance.",
+            )
+    else:
+        st.caption("🔒 Unlocks if you miss a question above — it's here to help you make up lost XP.")
     show_next_button()
 
 # -----------------------------
@@ -1312,15 +1544,18 @@ elif selected == "🎲 Level 3 — Distribution Junction":
             )
 
     st.subheader("🎁 Bonus Track — Make-Up XP")
-    st.caption("Needed a retry on one of the tracks above? Route this one for a chance to earn the XP back.")
-    st.markdown("**Bonus Track:** The time between machine breakdowns is continuous and memoryless.")
-    ans5 = answer_radio("Choose:", ["Exponential","Binomial","Uniform"], key="L3_BONUS")
-    if st.button("Route signal", key="L3_BONUS_submit"):
-        score_answer(
-            pid,3,"L3_BONUS",ans5,ans5=="Exponential",20,
-            correct_answer="Exponential",
-            explanation="The Exponential distribution is continuous, memoryless, and commonly models time between events.",
-        )
+    if bonus_unlocked(pid, 3):
+        st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed on a track above.")
+        st.markdown("**Bonus Track:** The time between machine breakdowns is continuous and memoryless.")
+        ans5 = answer_radio("Choose:", ["Exponential","Binomial","Uniform"], key="L3_BONUS")
+        if st.button("Route signal", key="L3_BONUS_submit"):
+            score_answer(
+                pid,3,"L3_BONUS",ans5,ans5=="Exponential",20,
+                correct_answer="Exponential",
+                explanation="The Exponential distribution is continuous, memoryless, and commonly models time between events.",
+            )
+    else:
+        st.caption("🔒 Unlocks if you miss a track above — it's here to help you make up lost XP.")
     show_next_button()
 
 # -----------------------------
@@ -1369,18 +1604,21 @@ elif selected == "✈️ Level 4 — Arrivals Terminal":
         )
 
     st.subheader("🎁 Bonus Challenge — Make-Up XP")
-    st.caption("Needed a retry above? Answer this for a chance to earn the XP back.")
-    q3 = answer_radio(
-        "If the average arrival rate doubles, what happens to the expected interarrival time (1/rate)?",
-        ["It is halved","It doubles","It stays the same"],
-        key="l4q3"
-    )
-    if st.button("Lock bonus answer", key="l4submit3"):
-        score_answer(
-            pid,4,"L4_BONUS",q3,q3=="It is halved",35,
-            correct_answer="It is halved",
-            explanation="Expected interarrival time is the reciprocal of the arrival rate, so doubling the rate cuts the expected wait in half.",
+    if bonus_unlocked(pid, 4):
+        st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed above.")
+        q3 = answer_radio(
+            "If the average arrival rate doubles, what happens to the expected interarrival time (1/rate)?",
+            ["It is halved","It doubles","It stays the same"],
+            key="l4q3"
         )
+        if st.button("Lock bonus answer", key="l4submit3"):
+            score_answer(
+                pid,4,"L4_BONUS",q3,q3=="It is halved",35,
+                correct_answer="It is halved",
+                explanation="Expected interarrival time is the reciprocal of the arrival rate, so doubling the rate cuts the expected wait in half.",
+            )
+    else:
+        st.caption("🔒 Unlocks if you miss a question above — it's here to help you make up lost XP.")
     show_next_button()
 
 # -----------------------------
@@ -1454,23 +1692,26 @@ elif selected == "🏆 Level 5 — Simulation Lab":
         )
 
     st.subheader("🎁 Bonus Challenge — Make-Up XP")
-    st.caption("Needed a retry above? Answer this for a chance to earn the XP back.")
-    q3 = answer_radio(
-        "What best describes a 'variance reduction' technique in Monte Carlo simulation?",
-        [
-            "A method to get more precise estimates with fewer runs",
-            "A method that guarantees zero error",
-            "A method that removes the need for randomness"
-        ],
-        key="l5q3"
-    )
-    if st.button("Submit bonus answer", key="l5submit3"):
-        score_answer(
-            pid,5,"L5_BONUS",q3,
-            q3=="A method to get more precise estimates with fewer runs",45,
-            correct_answer="A method to get more precise estimates with fewer runs",
-            explanation="Variance reduction techniques reduce simulation noise, giving a more precise estimate for the same number of runs.",
+    if bonus_unlocked(pid, 5):
+        st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed above.")
+        q3 = answer_radio(
+            "What best describes a 'variance reduction' technique in Monte Carlo simulation?",
+            [
+                "A method to get more precise estimates with fewer runs",
+                "A method that guarantees zero error",
+                "A method that removes the need for randomness"
+            ],
+            key="l5q3"
         )
+        if st.button("Submit bonus answer", key="l5submit3"):
+            score_answer(
+                pid,5,"L5_BONUS",q3,
+                q3=="A method to get more precise estimates with fewer runs",45,
+                correct_answer="A method to get more precise estimates with fewer runs",
+                explanation="Variance reduction techniques reduce simulation noise, giving a more precise estimate for the same number of runs.",
+            )
+    else:
+        st.caption("🔒 Unlocks if you miss a question above — it's here to help you make up lost XP.")
 
     show_boss_progress(xp)
     if xp >= PERFECT_SCORE:
