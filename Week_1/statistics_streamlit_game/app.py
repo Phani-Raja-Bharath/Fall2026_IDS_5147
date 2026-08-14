@@ -150,9 +150,10 @@ div[data-testid="stDownloadButton"] > button[kind="primary"]:hover {
     }
 
     .mobile-topbar-title {
-        font-size: 1rem;
+        font-size: .98rem;
         font-weight: 800;
-        line-height: 1.2;
+        line-height: 1.25;
+        overflow-wrap: anywhere;
     }
 
     .mobile-topbar-meta {
@@ -545,9 +546,41 @@ def assessment_score(pid, phase):
     scored = history[history["challenge"].isin(required) & (history["correct"] == 1)]
     return int(scored["challenge"].nunique()), total
 
+def self_assessment_summary(pid):
+    total = len(SELF_ASSESSMENT_ITEMS)
+    history = participant_stats(pid)
+    if history.empty:
+        return None, 0, total
+    required = [assessment_challenge_id("pre", key) for key, _ in SELF_ASSESSMENT_ITEMS]
+    rows = history[history["challenge"].isin(required)].copy()
+    if rows.empty:
+        return None, 0, total
+    scores = rows["answer"].map(SELF_ASSESSMENT_VALUES).dropna()
+    if scores.empty:
+        return None, 0, total
+    return float(scores.mean()), int(scores.count()), total
+
 def show_assessment_review(pid, phase):
     history = participant_stats(pid)
     if history.empty:
+        return
+    if phase == "pre":
+        st.subheader("Baseline self-assessment review")
+        for key, prompt in SELF_ASSESSMENT_ITEMS:
+            challenge = assessment_challenge_id("pre", key)
+            row = history[history["challenge"] == challenge]
+            if row.empty:
+                continue
+            answer = str(row.iloc[-1]["answer"])
+            st.markdown(
+                f"""
+                <div class="level-card">
+                    <b>{prompt}</b><br>
+                    <span>{answer}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         return
     phase_label = "Baseline" if phase == "pre" else "Check-out"
     st.subheader(f"{phase_label} review")
@@ -652,8 +685,9 @@ PAGE_OPTIONS = [
     "🥇 Leaderboard",
 ]
 
-# Five questions mirroring the five levels, asked once before Level 1 (baseline)
-# and again after Level 5 (check-out) to measure learning gain. Always 0 XP.
+# Five questions mirroring the five levels, asked after Level 5 as a check-out.
+# The baseline uses the same keys as a self-assessment, so completion checks and
+# reporting can compare the same topics without treating the baseline as a quiz.
 ASSESSMENT_QUESTIONS = [
     ("CENTER", "A dataset has one extremely large outlier. Which measure of center is pulled the most by it?",
      ["Mean", "Median", "Mode"], "Mean"),
@@ -676,21 +710,42 @@ ASSESSMENT_EXPLANATIONS = {
     "SIMULATION": "Many Monte Carlo runs show the range of possible outcomes and make estimates more stable.",
 }
 
+SELF_ASSESSMENT_SCALE = [
+    "1 - I have not seen this yet",
+    "2 - I recognize the idea, but I need help",
+    "3 - I can try it with examples",
+    "4 - I can explain it and use it",
+    "5 - I could teach someone else",
+]
+
+SELF_ASSESSMENT_VALUES = {
+    option: index
+    for index, option in enumerate(SELF_ASSESSMENT_SCALE, start=1)
+}
+
+SELF_ASSESSMENT_ITEMS = [
+    ("CENTER", "Choosing the best measure of center when data has outliers"),
+    ("SPREAD", "Interpreting standard deviation as spread around the mean"),
+    ("DISTRIBUTION", "Matching common distributions to modeling situations"),
+    ("ARRIVAL", "Connecting Poisson event counts with Exponential waiting times"),
+    ("SIMULATION", "Explaining why repeated Monte Carlo runs are useful"),
+]
+
 # -----------------------------
 # Story
 # -----------------------------
 STORY = {
     "intro": (
         "**Mission:** fix five statistics problems and unlock the final simulation challenge.\n\n"
-        "Start with a short baseline check-in. Then work through center, spread, distributions, "
-        "arrival models, and Monte Carlo simulation. The final check-out repeats the baseline "
-        "questions so you can see what changed. Check-ins do not affect XP."
+        "Start with a short confidence check-in. Then work through center, spread, distributions, "
+        "arrival models, and Monte Carlo simulation. The final check-out lets you see what changed. "
+        "Check-ins do not affect XP."
     ),
     "pre_assessment": (
-        "Five quick baseline questions. They are ungraded and will appear again at the end."
+        "Rate where you are starting on five statistics ideas. This is a self-assessment, not a quiz."
     ),
     "post_assessment": (
-        "Answer the same five questions again to compare your before and after results."
+        "Answer five check-out questions to see what you can do after the game."
     ),
     "levels": {
         1: "Outliers can pull the mean. Compare mean, median, and mode before choosing a center.",
@@ -745,7 +800,7 @@ def go_to_next_page():
         return
     next_page = PAGE_OPTIONS[current_index + 1]
     if current == "🧭 Diagnostic Check-In" and not assessment_complete(st.session_state.pid, "pre"):
-        set_answer_feedback("warning", "Answer all 5 baseline questions before heading out.")
+        set_answer_feedback("warning", "Complete all 5 baseline self-ratings before heading out.")
         return
     if current == "📊 Mastery Check-Out" and not assessment_complete(st.session_state.pid, "post"):
         set_answer_feedback("warning", "Answer all 5 check-out questions before moving on.")
@@ -1063,6 +1118,15 @@ for key, default in {
 _ensure_schema()
 
 if not st.session_state.logged:
+    st.markdown(
+        """
+        <div class="mobile-topbar">
+            <div class="mobile-topbar-title">🎮 StatsQuest</div>
+            <div class="mobile-topbar-meta">Start screen · Modeling & Simulation</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown('<div class="game-title">🎮 StatsQuest</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="game-subtitle">An individual statistics self-assessment for Modeling & Simulation</div>',
@@ -1171,20 +1235,34 @@ if st.session_state.is_admin:
             "text/csv",
         )
 
-    st.subheader("📈 Pre/post learning check")
+    st.subheader("📈 Self-assessment and check-out")
     diag = log[log["challenge"].str.startswith(("PRE_", "POST_"))].copy() if not log.empty else log
     if diag.empty:
         st.info("No baseline or check-out responses recorded yet.")
     else:
-        diag["Phase"] = diag["challenge"].str.split("_").str[0].map({"PRE": "Baseline correct", "POST": "Check-out correct"})
-        summary = (
-            diag[diag["correct"] == 1]
-            .groupby(["Name", "Phase"])["challenge"]
-            .nunique()
-            .unstack(fill_value=0)
-            .reindex(columns=["Baseline correct", "Check-out correct"], fill_value=0)
+        baseline = diag[diag["challenge"].str.startswith("PRE_")].copy()
+        baseline["Confidence"] = baseline["answer"].map(SELF_ASSESSMENT_VALUES)
+        baseline_summary = (
+            baseline.dropna(subset=["Confidence"])
+            .groupby("Name")
+            .agg(
+                **{
+                    "Baseline confidence": ("Confidence", "mean"),
+                    "Baseline topics": ("challenge", "nunique"),
+                }
+            )
         )
-        summary["Change"] = summary["Check-out correct"] - summary["Baseline correct"]
+        checkout_summary = (
+            diag[(diag["challenge"].str.startswith("POST_")) & (diag["correct"] == 1)]
+            .groupby("Name")["challenge"]
+            .nunique()
+            .rename("Check-out correct")
+        )
+        summary = baseline_summary.join(checkout_summary, how="outer").fillna(
+            {"Baseline topics": 0, "Check-out correct": 0}
+        )
+        if "Baseline confidence" in summary:
+            summary["Baseline confidence"] = summary["Baseline confidence"].round(1)
         st.dataframe(summary.reset_index(), hide_index=True, width="stretch")
 
     st.stop()
@@ -1268,8 +1346,8 @@ if st.session_state.last_selected_page != selected:
 st.markdown(
     f"""
     <div class="mobile-topbar">
-        <div class="mobile-topbar-title">🎮 StatsQuest</div>
-        <div class="mobile-topbar-meta">{selected} · {xp}/{PERFECT_SCORE} XP · {badge}</div>
+        <div class="mobile-topbar-title">{selected}</div>
+        <div class="mobile-topbar-meta">🎮 StatsQuest · {xp}/{PERFECT_SCORE} XP · {badge}</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -1299,27 +1377,30 @@ if selected == "🧭 Diagnostic Check-In":
     st.markdown(STORY["pre_assessment"])
 
     if assessment_complete(pid, "pre"):
-        pre_correct, pre_total = assessment_score(pid, "pre")
-        st.success(f"Baseline recorded: {pre_correct}/{pre_total} correct before training.")
+        avg_confidence, answered_count, total_count = self_assessment_summary(pid)
+        if avg_confidence is None:
+            st.success("Baseline recorded.")
+        else:
+            st.success(f"Baseline recorded: average confidence {avg_confidence:.1f}/5 across {answered_count}/{total_count} topics.")
         st.caption("This didn't affect your XP — it just gives us something to compare against once you finish.")
         show_assessment_review(pid, "pre")
     else:
         st.info(
-            "Answer these 5 quick questions before you head out to Meanhaven Station. "
-            "They're ungraded and won't affect your XP — they just set your starting point."
+            "Rate your current confidence before you head out to Meanhaven Station. "
+            "There are no right or wrong answers and this won't affect your XP."
         )
         with st.form("pre_assessment_form"):
             pre_answers = {}
-            for key, prompt, options, _ in ASSESSMENT_QUESTIONS:
-                pre_answers[key] = answer_radio(prompt, options, key=f"pre_{key}", index=None)
-            pre_submitted = st.form_submit_button("Submit baseline check-in", type="primary")
+            for key, prompt in SELF_ASSESSMENT_ITEMS:
+                pre_answers[key] = st.radio(prompt, SELF_ASSESSMENT_SCALE, key=f"pre_{key}", index=None)
+            pre_submitted = st.form_submit_button("Submit self-assessment", type="primary")
         if pre_submitted:
             if any(value is None for value in pre_answers.values()):
-                st.warning("Answer all 5 questions before submitting.")
+                st.warning("Rate all 5 topics before submitting.")
             else:
-                for key, _, _, correct_answer in ASSESSMENT_QUESTIONS:
-                    record_diagnostic_answer(pid, "pre", key, pre_answers[key], pre_answers[key] == correct_answer)
-                set_answer_feedback("success", "Baseline check-in recorded. You can start Level 1.")
+                for key, _ in SELF_ASSESSMENT_ITEMS:
+                    record_diagnostic_answer(pid, "pre", key, pre_answers[key], False)
+                set_answer_feedback("success", "Self-assessment recorded. You can start Level 1.")
                 st.rerun()
     show_next_button()
 
@@ -1357,8 +1438,11 @@ elif selected == "🏠 Home":
         "Complete the five levels: center, variability, distributions, arrivals, and Monte Carlo simulation."
     )
     if assessment_complete(pid, "pre"):
-        pre_correct, pre_total = assessment_score(pid, "pre")
-        st.caption(f"📈 Baseline check-in: {pre_correct}/{pre_total} correct before training.")
+        avg_confidence, _, _ = self_assessment_summary(pid)
+        if avg_confidence is None:
+            st.caption("📈 Baseline self-assessment recorded.")
+        else:
+            st.caption(f"📈 Baseline confidence: {avg_confidence:.1f}/5 before training.")
 
     st.subheader("Badges")
     badge_df = pd.DataFrame(
@@ -1727,17 +1811,16 @@ elif selected == "📊 Mastery Check-Out":
 
     if assessment_complete(pid, "post"):
         post_correct, post_total = assessment_score(pid, "post")
-        pre_correct, pre_total = assessment_score(pid, "pre")
+        avg_confidence, _, _ = self_assessment_summary(pid)
         st.success(f"Check-out recorded: {post_correct}/{post_total} correct.")
-        gain = post_correct - pre_correct
         a, b, c = st.columns(3)
-        a.metric("Baseline", f"{pre_correct}/{pre_total}")
+        a.metric("Baseline confidence", f"{avg_confidence:.1f}/5" if avg_confidence is not None else "Recorded")
         b.metric("Check-out", f"{post_correct}/{post_total}")
-        c.metric("Change", f"+{gain}" if gain >= 0 else str(gain))
+        c.metric("Topics checked", f"{post_total}")
         show_assessment_review(pid, "post")
     else:
         st.info(
-            "Same five questions as the baseline. Still ungraded and no XP effect."
+            "Five ungraded questions. No XP effect."
         )
         with st.form("post_assessment_form"):
             post_answers = {}
