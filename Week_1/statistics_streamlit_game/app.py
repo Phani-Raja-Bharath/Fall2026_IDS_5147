@@ -641,6 +641,26 @@ LEVEL_REQUIRED_CHALLENGES = {
     for level, challenges in LEVEL_CHALLENGES.items()
 }
 
+CHALLENGE_POINTS = {
+    "L1_OUTLIER": 25,
+    "L1_CENTER": 25,
+    "L1_BONUS": 25,
+    "L2_CONSISTENCY": 30,
+    "L2_SD": 30,
+    "L2_BONUS": 30,
+    "L3_Q1": 20,
+    "L3_Q2": 20,
+    "L3_Q3": 20,
+    "L3_Q4": 20,
+    "L3_BONUS": 20,
+    "L4_POISSON": 35,
+    "L4_EXP": 35,
+    "L4_BONUS": 35,
+    "L5_STABILITY": 45,
+    "L5_PURPOSE": 45,
+    "L5_BONUS": 45,
+}
+
 CHALLENGE_NAMES = {
     "L1_OUTLIER": "Outlier Attack",
     "L1_CENTER": "Pick the Better Center",
@@ -869,6 +889,30 @@ def level_has_wrong_required_attempt(pid, level):
     wrong = history[history["challenge"].isin(required) & (history["correct"] == 0)]
     return not wrong.empty
 
+def challenge_xp_missed(pid, challenge):
+    base = CHALLENGE_POINTS.get(challenge, 0)
+    if base == 0:
+        return 0
+    history = challenge_history(pid, challenge)
+    if history.empty:
+        return 0
+    earned = int(history["points"].max())
+    return max(0, base - earned)
+
+def level_missed_required_xp(pid, level):
+    return sum(challenge_xp_missed(pid, challenge) for challenge in LEVEL_REQUIRED_CHALLENGES[level])
+
+def level_bonus_remaining_xp(pid, level):
+    bonus_id = level_bonus_challenge(level)
+    if bonus_id is None:
+        return 0
+    bonus_base = CHALLENGE_POINTS.get(bonus_id, 0)
+    bonus_earned = 0
+    history = challenge_history(pid, bonus_id)
+    if not history.empty:
+        bonus_earned = int(history["points"].max())
+    return max(0, min(level_missed_required_xp(pid, level), bonus_base - bonus_earned))
+
 def bonus_unlocked(pid, level):
     """Unlocked once a required question in this level has been missed, or
     once the bonus itself already has an attempt on record (so it doesn't
@@ -950,10 +994,14 @@ def show_level_progress(pid, level):
 
     bonus_id = level_bonus_challenge(level)
     if bonus_id:
+        missed_xp = level_missed_required_xp(pid, level)
+        bonus_remaining = level_bonus_remaining_xp(pid, level)
+        if missed_xp > 0:
+            st.caption(f"Missed XP from required questions: {missed_xp}. Make-up XP still available here: {bonus_remaining}.")
         if bonus_id in correct:
             st.caption(f"🎁 Bonus complete: {challenge_label(bonus_id)} (+XP earned)")
         elif bonus_unlocked(pid, level):
-            st.caption(f"🎁 Bonus unlocked: {challenge_label(bonus_id)} — a chance to earn back the XP you missed.")
+            st.caption(f"🎁 Bonus unlocked: {challenge_label(bonus_id)} — a chance to earn back up to {bonus_remaining} XP.")
         else:
             st.caption(f"🎁 Bonus challenge locked — it unlocks if you miss a question above.")
 
@@ -1019,6 +1067,36 @@ def shuffled_options(key, options):
 
 def answer_radio(label, options, key, **kwargs):
     return st.radio(label, shuffled_options(key, options), key=key, **kwargs)
+
+def show_challenge_acknowledgement(pid, challenge):
+    history = challenge_history(pid, challenge)
+    if history.empty:
+        return
+
+    correct_rows = history[history["correct"] == 1]
+    if not correct_rows.empty:
+        row = correct_rows.iloc[-1]
+        points = int(row["points"])
+        answer = row["answer"]
+        if points > 0:
+            st.success(f"Answered: {challenge_label(challenge)}. You earned {points} XP. Your answer: {answer}.")
+        else:
+            st.info(f"Answered: {challenge_label(challenge)} is complete. No XP was available on this attempt. Your answer: {answer}.")
+        return
+
+    attempts_used = len(history)
+    attempts_left = max(0, MAX_WRONG_ATTEMPTS - attempts_used)
+    latest_answer = history.iloc[-1]["answer"]
+    if attempts_left > 0:
+        st.warning(
+            f"Attempt recorded for {challenge_label(challenge)}. Last answer: {latest_answer}. "
+            f"{attempts_left} scoring attempt(s) left."
+        )
+    else:
+        st.warning(
+            f"Scoring attempts used for {challenge_label(challenge)}. Last answer: {latest_answer}. "
+            "Keep trying to complete the question."
+        )
 
 def format_correct_feedback(message, explanation=None):
     if explanation:
@@ -1459,6 +1537,7 @@ elif selected == "🎯 Level 1 — Meanhaven Station":
     c3.metric("Mode", ", ".join(str(int(m)) for m in modes))
 
     st.subheader("Challenge 1 — Outlier Attack")
+    show_challenge_acknowledgement(pid, "L1_OUTLIER")
     outlier = st.slider("Replace the final commute time with:", 60, 600, 600, 10)
     changed = [10,15,15,20,25,30,outlier]
     a,b = st.columns(2)
@@ -1478,6 +1557,7 @@ elif selected == "🎯 Level 1 — Meanhaven Station":
         )
 
     st.subheader("Challenge 2 — Pick the Better Center")
+    show_challenge_acknowledgement(pid, "L1_CENTER")
     st.write("A hospital reports patient waiting times with a few extremely long delays.")
     q2 = answer_radio(
         "Which measure would usually be more resistant to those extreme values?",
@@ -1494,6 +1574,7 @@ elif selected == "🎯 Level 1 — Meanhaven Station":
     st.subheader("🎁 Bonus Challenge — Make-Up XP")
     if bonus_unlocked(pid, 1):
         st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed above.")
+        show_challenge_acknowledgement(pid, "L1_BONUS")
         q3 = answer_radio(
             "A dataset is symmetric (bell-shaped) with no outliers. How do its mean and median compare?",
             ["They are approximately equal","The mean is always much larger","The median is undefined"],
@@ -1527,6 +1608,7 @@ elif selected == "📏 Level 2 — Spreadmoor Yards":
     })
     st.dataframe(df, hide_index=True, width="stretch")
 
+    show_challenge_acknowledgement(pid, "L2_CONSISTENCY")
     q = answer_radio(
         "Both machines have the same mean. Which machine is more consistent?",
         ["Machine A","Machine B","They are equally consistent"],
@@ -1540,6 +1622,7 @@ elif selected == "📏 Level 2 — Spreadmoor Yards":
         )
 
     st.subheader("Variability Lab")
+    show_challenge_acknowledgement(pid, "L2_SD")
     spread = st.slider("Choose a standard deviation for a normal process", 1, 30, 10)
     np.random.seed(7)
     sample = np.random.normal(50, spread, 1200)
@@ -1562,6 +1645,7 @@ elif selected == "📏 Level 2 — Spreadmoor Yards":
     st.subheader("🎁 Bonus Challenge — Make-Up XP")
     if bonus_unlocked(pid, 2):
         st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed above.")
+        show_challenge_acknowledgement(pid, "L2_BONUS")
         q3 = answer_radio(
             "Which quantity is the square of the standard deviation?",
             ["Variance","Mean","Median"],
@@ -1606,6 +1690,7 @@ elif selected == "🎲 Level 3 — Distribution Junction":
 
     for i,(cid,prompt,opts,correct) in enumerate(questions,1):
         st.markdown(f"**Junction Track {i}:** {prompt}")
+        show_challenge_acknowledgement(pid, cid)
         ans = answer_radio("Choose:", opts, key=cid)
         if st.button("Route signal", key=f"{cid}_submit"):
             score_answer(
@@ -1618,6 +1703,7 @@ elif selected == "🎲 Level 3 — Distribution Junction":
     if bonus_unlocked(pid, 3):
         st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed on a track above.")
         st.markdown("**Bonus Track:** The time between machine breakdowns is continuous and memoryless.")
+        show_challenge_acknowledgement(pid, "L3_BONUS")
         ans5 = answer_radio("Choose:", ["Exponential","Binomial","Uniform"], key="L3_BONUS")
         if st.button("Route signal", key="L3_BONUS_submit"):
             score_answer(
@@ -1652,6 +1738,7 @@ elif selected == "✈️ Level 4 — Arrivals Terminal":
         ["Poisson","Exponential","Normal"],
         key="l4q1"
     )
+    show_challenge_acknowledgement(pid, "L4_POISSON")
     if st.button("Lock count answer", key="l4submit1"):
         score_answer(
             pid,4,"L4_POISSON",q1,q1=="Poisson",35,
@@ -1667,6 +1754,7 @@ elif selected == "✈️ Level 4 — Arrivals Terminal":
         ["Binomial","Exponential","Uniform"],
         key="l4q2"
     )
+    show_challenge_acknowledgement(pid, "L4_EXP")
     if st.button("Lock waiting-time answer", key="l4submit2"):
         score_answer(
             pid,4,"L4_EXP",q2,q2=="Exponential",35,
@@ -1677,6 +1765,7 @@ elif selected == "✈️ Level 4 — Arrivals Terminal":
     st.subheader("🎁 Bonus Challenge — Make-Up XP")
     if bonus_unlocked(pid, 4):
         st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed above.")
+        show_challenge_acknowledgement(pid, "L4_BONUS")
         q3 = answer_radio(
             "If the average arrival rate doubles, what happens to the expected interarrival time (1/rate)?",
             ["It is halved","It doubles","It stays the same"],
@@ -1737,6 +1826,7 @@ elif selected == "🏆 Level 5 — Simulation Lab":
         ],
         key="l5q1"
     )
+    show_challenge_acknowledgement(pid, "L5_STABILITY")
     if st.button("Submit answer", key="l5submit1"):
         score_answer(
             pid,5,"L5_STABILITY",q1,
@@ -1754,6 +1844,7 @@ elif selected == "🏆 Level 5 — Simulation Lab":
         ],
         key="l5q2"
     )
+    show_challenge_acknowledgement(pid, "L5_PURPOSE")
     if st.button("Submit final answer", key="l5submit2"):
         score_answer(
             pid,5,"L5_PURPOSE",q2,
@@ -1765,6 +1856,7 @@ elif selected == "🏆 Level 5 — Simulation Lab":
     st.subheader("🎁 Bonus Challenge — Make-Up XP")
     if bonus_unlocked(pid, 5):
         st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed above.")
+        show_challenge_acknowledgement(pid, "L5_BONUS")
         q3 = answer_radio(
             "What best describes a 'variance reduction' technique in Monte Carlo simulation?",
             [
