@@ -9,8 +9,10 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
-DB = "stats_game.db"
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+DB = os.path.join(APP_DIR, "stats_game.db")
 
 def get_secret(name):
     value = os.environ.get(name)
@@ -60,6 +62,10 @@ st.markdown("""
     color: rgba(128,128,128,.95);
     margin-bottom: 1.15rem;
     font-size: clamp(.95rem, 3vw, 1rem);
+}
+
+.mobile-topbar {
+    display: none;
 }
 
 .level-card {
@@ -115,8 +121,41 @@ div[data-testid="stDownloadButton"] > button[kind="primary"]:hover {
 
 @media (max-width: 700px) {
     .block-container {
-        padding: 1.25rem .75rem 2rem;
+        padding: .75rem .75rem 2rem;
         max-width: 100%;
+    }
+
+    .game-title {
+        font-size: clamp(1.35rem, 7vw, 1.65rem);
+        margin-bottom: .35rem;
+    }
+
+    .game-subtitle {
+        margin-bottom: .85rem;
+    }
+
+    .mobile-topbar {
+        display: block;
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        margin: -.75rem -.75rem .85rem;
+        padding: .65rem .75rem;
+        background: rgba(255,255,255,.98);
+        border-bottom: 1px solid var(--statsquest-card-border);
+        box-shadow: 0 1px 8px rgba(15,23,42,.08);
+    }
+
+    .mobile-topbar-title {
+        font-size: 1rem;
+        font-weight: 800;
+        line-height: 1.2;
+    }
+
+    .mobile-topbar-meta {
+        color: #666;
+        font-size: .82rem;
+        margin-top: .15rem;
     }
 
     section[data-testid="stSidebar"] {
@@ -402,7 +441,7 @@ LEVELS = {
     2: {"name":"Spreadmoor Yards", "icon":"📏"},
     3: {"name":"Distribution Junction", "icon":"🎲"},
     4: {"name":"Arrivals Terminal", "icon":"✈️"},
-    5: {"name":"Control Core", "icon":"🏆"},
+    5: {"name":"Simulation Lab", "icon":"🏆"},
 }
 
 LEVEL_MAX_POINTS = {
@@ -447,7 +486,7 @@ PAGE_LEVELS = {
     "📏 Level 2 — Spreadmoor Yards": 2,
     "🎲 Level 3 — Distribution Junction": 3,
     "✈️ Level 4 — Arrivals Terminal": 4,
-    "🏆 Level 5 — Control Core": 5,
+    "🏆 Level 5 — Simulation Lab": 5,
 }
 
 PAGE_OPTIONS = [
@@ -457,7 +496,7 @@ PAGE_OPTIONS = [
     "📏 Level 2 — Spreadmoor Yards",
     "🎲 Level 3 — Distribution Junction",
     "✈️ Level 4 — Arrivals Terminal",
-    "🏆 Level 5 — Control Core",
+    "🏆 Level 5 — Simulation Lab",
     "📊 Mastery Check-Out",
     "🥇 Leaderboard",
 ]
@@ -483,50 +522,26 @@ ASSESSMENT_QUESTIONS = [
 # -----------------------------
 STORY = {
     "intro": (
-        "**Mission briefing.** The Analytika Grid — the network of statistical models running "
-        "the city's traffic dispatch, factory yards, arrivals terminal, and emergency response — "
-        "has gone unstable. Readings keep drifting off spec, and nobody can tell which numbers "
-        "to trust anymore.\n\n"
-        "You've just been sworn in as a **Data Cadet** of the Analytika Guild. **Dr. Aria Voss**, "
-        "the Guild's Chief Archivist, is sending you to recalibrate five stations along the Grid — "
-        "each one destabilized by a different statistical blind spot. Clear all five and you'll be "
-        "cleared to enter the Control Core, where the Grid's irreducible randomness — the "
-        "**Variance Wraith** — has to be *contained*, not deleted, by proving you understand how "
-        "simulation actually works.\n\n"
-        "Two short, ungraded check-ins bookend the mission: a **baseline** right now, before you "
-        "leave for Meanhaven Station, and a **check-out** once the Core is stable. Neither affects "
-        "your XP — they just show how much you actually learned."
+        "**Mission:** fix five statistics problems and unlock the final simulation challenge.\n\n"
+        "Start with a short baseline check-in. Then work through center, spread, distributions, "
+        "arrival models, and Monte Carlo simulation. The final check-out repeats the baseline "
+        "questions so you can see what changed. Check-ins do not affect XP."
     ),
     "pre_assessment": (
-        "*Dr. Voss:* \"Before you head out, Cadet — five quick questions so the Guild knows where "
-        "you're starting from. This is a baseline, not a test. Answer honestly; you'll see these "
-        "again once you've cleared every station.\""
+        "Five quick baseline questions. They are ungraded and will appear again at the end."
     ),
     "post_assessment": (
-        "*Dr. Voss:* \"The Grid's stable again — nice work. One last formality: the same five "
-        "questions from your first day. Let's see how far you've actually come.\""
+        "Answer the same five questions again to compare your before and after results."
     ),
     "levels": {
-        1: "*Dr. Voss:* \"Meanhaven's dispatch board is reporting a commute time nobody recognizes. "
-           "Before you trust any number that claims to be *typical*, you need to know which measure "
-           "of center an outlier can quietly hijack.\"",
-        2: "*Dr. Voss:* \"Two machines in the Spreadmoor Yards report the exact same average output, "
-           "yet one keeps drifting out of spec. A mean alone can't catch that — you need to read the "
-           "spread.\"",
-        3: "*Dr. Voss:* \"Every signal through the Junction has to be routed onto the right "
-           "distribution track, or the switching system misfires downstream. Match each situation to "
-           "the distribution that actually generates it.\"",
-        4: "*Dr. Voss:* \"The Terminal's arrival boards run on a Poisson process, and the gaps between "
-           "arrivals follow a distribution of their own. Mix the two up and every schedule downstream "
-           "falls apart.\"",
-        5: "*Dr. Voss:* \"This is it, Cadet. The Variance Wraith at the Core isn't a bug to patch — "
-           "it's irreducible randomness. You won't delete it. You'll contain it, by running enough "
-           "simulations to know its behavior cold.\"",
+        1: "Outliers can pull the mean. Compare mean, median, and mode before choosing a center.",
+        2: "Two datasets can share the same mean but have very different spread.",
+        3: "Match each modeling situation to the distribution that fits it.",
+        4: "Use Poisson for event counts and Exponential for time between events.",
+        5: "Run repeated simulations to estimate possible outcomes and uncertainty.",
     },
     "epilogue": (
-        "With the Core recalibrated, the Grid's readings settle. The Variance Wraith doesn't "
-        "vanish — it never will — but it's contained now, predictable within limits you understand. "
-        "Dr. Voss signs off on your certification: **Analytika Guild, Full Data Cadet.**"
+        "Finished. You completed the statistics path and the final simulation challenge."
     ),
 }
 
@@ -601,11 +616,11 @@ def boss_defeated_percent(xp):
 
 def show_boss_progress(xp):
     defeated = boss_defeated_percent(xp)
-    st.progress(min(1.0, xp / PERFECT_SCORE), text=f"Variance Wraith contained: {defeated}%")
+    st.progress(min(1.0, xp / PERFECT_SCORE), text=f"Final challenge progress: {defeated}%")
     if xp >= PERFECT_SCORE:
-        st.success(f"👑 Perfect score: {xp}/{PERFECT_SCORE} XP. The Variance Wraith is fully contained — the Grid is stable!")
+        st.success(f"👑 Perfect score: {xp}/{PERFECT_SCORE} XP. All challenges complete.")
     else:
-        st.info(f"Variance Wraith contained: {defeated}% ({xp}/{PERFECT_SCORE} XP). A perfect score fully contains it.")
+        st.info(f"Progress: {defeated}% ({xp}/{PERFECT_SCORE} XP). A perfect score completes the path.")
 
 def correct_challenges(pid):
     history = participant_stats(pid)
@@ -726,8 +741,8 @@ BADGE_DESCRIPTIONS = [
     ("⭐ Stats Explorer", "50-109 XP", "Understands center and is beginning to reason about variability."),
     ("🥉 Variability Scout", "110-179 XP", "Can compare spread and recognize how distributions shape simulations."),
     ("🥈 Distribution Strategist", "180-249 XP", "Can connect probability distributions to modeling situations."),
-    ("🥇 Monte Carlo Master", "250-504 XP", "Can reason through simulation uncertainty and Control Core-level Monte Carlo concepts."),
-    ("👑 Simulation Champion", f"{PERFECT_SCORE} XP", "Perfect cumulative score; the Variance Wraith is fully contained."),
+    ("🥇 Monte Carlo Master", "250-504 XP", "Can reason through simulation uncertainty and Monte Carlo concepts."),
+    ("👑 Simulation Champion", f"{PERFECT_SCORE} XP", "Perfect cumulative score; all challenges complete."),
 ]
 
 CONSOLATION_FRACTION = 0.5  # XP fraction awarded for a correct answer on the final attempt
@@ -806,6 +821,7 @@ for key, default in {
     "last_name": "",
     "answer_feedback": None,
     "show_balloons": False,
+    "last_selected_page": "",
 }.items():
     if key not in st.session_state:
         st.session_state[key] = default
@@ -822,9 +838,7 @@ if not st.session_state.logged:
     st.markdown(STORY["intro"])
 
     st.info(
-        "This is an individual challenge. Enter your name and choose a 4-digit PIN — "
-        "use the same name + PIN next time to resume your progress. Keep your PIN "
-        "private so no one else can see or change your scores."
+        "Enter your name and a 4-digit PIN. Use the same name + PIN later to resume."
     )
 
     c1, c2 = st.columns(2)
@@ -842,6 +856,7 @@ if not st.session_state.logged:
             st.session_state.pid = new_pid
             st.session_state.first_name = fn
             st.session_state.last_name = ln
+            st.session_state.selected_page = first_incomplete_page(new_pid)
             st.session_state.logged = True
             st.rerun()
 
@@ -951,8 +966,28 @@ with st.sidebar:
 # -----------------------------
 # Header
 # -----------------------------
+if st.session_state.last_selected_page != selected:
+    components.html(
+        """
+        <script>
+        window.parent.scrollTo({ top: 0, left: 0, behavior: "instant" });
+        </script>
+        """,
+        height=0,
+    )
+    st.session_state.last_selected_page = selected
+
+st.markdown(
+    f"""
+    <div class="mobile-topbar">
+        <div class="mobile-topbar-title">🎮 StatsQuest</div>
+        <div class="mobile-topbar-meta">{selected} · {xp}/{PERFECT_SCORE} XP · {badge}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 st.markdown('<div class="game-title">🎮 StatsQuest: Modeling & Simulation</div>', unsafe_allow_html=True)
-st.caption("Learn statistics by working through challenges and unlocking levels.")
+st.caption("Short statistics challenges with XP, progress, and a leaderboard.")
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("XP", f"{xp}/{PERFECT_SCORE}")
@@ -963,7 +998,7 @@ if not board.empty:
     pid_list = board["PID"].tolist()
     if pid in pid_list:
         rank = int(board["Rank"].tolist()[pid_list.index(pid)])
-m3.metric("Wraith Contained", f"{boss_defeated_percent(xp)}%")
+m3.metric("Progress", f"{boss_defeated_percent(xp)}%")
 m4.metric("Class Rank", f"#{rank}" if rank != "—" else "—")
 
 show_answer_feedback()
@@ -995,7 +1030,7 @@ if selected == "🧭 Diagnostic Check-In":
             else:
                 for key, _, _, correct_answer in ASSESSMENT_QUESTIONS:
                     record_diagnostic_answer(pid, "pre", key, pre_answers[key], pre_answers[key] == correct_answer)
-                set_answer_feedback("success", "Baseline check-in recorded. Good luck out there, Cadet.")
+                set_answer_feedback("success", "Baseline check-in recorded. You can start Level 1.")
                 st.rerun()
     show_next_button()
 
@@ -1030,10 +1065,7 @@ elif selected == "🏠 Home":
 
     st.subheader("Mission")
     st.write(
-        "You must understand center, variability, probability distributions, "
-        "arrival processes, and Monte Carlo simulation before you can contain the Variance Wraith "
-        "at the Control Core. Each level is based directly on the statistics topics from your "
-        "Modeling & Simulation notebook."
+        "Complete the five levels: center, variability, distributions, arrivals, and Monte Carlo simulation."
     )
     if assessment_complete(pid, "pre"):
         pre_correct, pre_total = assessment_score(pid, "pre")
@@ -1290,8 +1322,8 @@ elif selected == "✈️ Level 4 — Arrivals Terminal":
 # -----------------------------
 # Level 5
 # -----------------------------
-elif selected == "🏆 Level 5 — Control Core":
-    st.header("🏆 Level 5 — Control Core")
+elif selected == "🏆 Level 5 — Simulation Lab":
+    st.header("🏆 Level 5 — Simulation Lab")
     st.markdown(STORY["levels"][5])
     show_level_progress(pid, 5)
     st.write(
@@ -1332,7 +1364,7 @@ elif selected == "🏆 Level 5 — Control Core":
         ],
         key="l5q1"
     )
-    if st.button("Engage the Wraith", key="l5submit1"):
+    if st.button("Submit answer", key="l5submit1"):
         score_answer(
             pid,5,"L5_STABILITY",q1,
             q1=="It generally becomes more stable",45,
@@ -1349,7 +1381,7 @@ elif selected == "🏆 Level 5 — Control Core":
         ],
         key="l5q2"
     )
-    if st.button("Final containment strike", key="l5submit2"):
+    if st.button("Submit final answer", key="l5submit2"):
         score_answer(
             pid,5,"L5_PURPOSE",q2,
             q2=="To study the range and likelihood of possible outcomes",45,
@@ -1368,7 +1400,7 @@ elif selected == "🏆 Level 5 — Control Core":
         ],
         key="l5q3"
     )
-    if st.button("Bonus containment strike", key="l5submit3"):
+    if st.button("Submit bonus answer", key="l5submit3"):
         score_answer(
             pid,5,"L5_BONUS",q3,
             q3=="A method to get more precise estimates with fewer runs",45,
@@ -1399,8 +1431,7 @@ elif selected == "📊 Mastery Check-Out":
         c.metric("Change", f"+{gain}" if gain >= 0 else str(gain))
     else:
         st.info(
-            "Same five questions as your baseline check-in — answer them again now that "
-            "you've cleared every station. Still ungraded and won't affect your XP."
+            "Same five questions as the baseline. Still ungraded and no XP effect."
         )
         with st.form("post_assessment_form"):
             post_answers = {}
