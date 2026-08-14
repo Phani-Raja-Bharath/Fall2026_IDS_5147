@@ -433,6 +433,35 @@ def assessment_score(pid, phase):
     scored = history[history["challenge"].isin(required) & (history["correct"] == 1)]
     return int(scored["challenge"].nunique()), total
 
+def show_assessment_review(pid, phase):
+    history = participant_stats(pid)
+    if history.empty:
+        return
+    phase_label = "Baseline" if phase == "pre" else "Check-out"
+    st.subheader(f"{phase_label} review")
+    for key, prompt, _, correct_answer in ASSESSMENT_QUESTIONS:
+        challenge = assessment_challenge_id(phase, key)
+        row = history[history["challenge"] == challenge]
+        if row.empty:
+            continue
+        answer = str(row.iloc[-1]["answer"])
+        is_correct = bool(row.iloc[-1]["correct"])
+        status = "Correct" if is_correct else "Not quite"
+        if is_correct:
+            result = f"**{status}.** You chose **{answer}**."
+        else:
+            result = f"**{status}.** You chose **{answer}**; the best answer is **{correct_answer}**."
+        st.markdown(
+            f"""
+            <div class="level-card">
+                <b>{prompt}</b><br>
+                <span>{result}</span><br>
+                <span class="small-muted">{ASSESSMENT_EXPLANATIONS[key]}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
 # -----------------------------
 # Game config
 # -----------------------------
@@ -516,6 +545,14 @@ ASSESSMENT_QUESTIONS = [
      ["To estimate the range and likelihood of outcomes", "To eliminate all randomness", "To guarantee the best-case result"],
      "To estimate the range and likelihood of outcomes"),
 ]
+
+ASSESSMENT_EXPLANATIONS = {
+    "CENTER": "The mean uses every value, so one extreme value can pull it far away from the typical data point.",
+    "SPREAD": "Standard deviation measures how far values usually are from the mean.",
+    "DISTRIBUTION": "A Binomial distribution counts successes across a fixed number of independent success/failure trials.",
+    "ARRIVAL": "In a Poisson process, the time between events is modeled with an Exponential distribution.",
+    "SIMULATION": "Many Monte Carlo runs show the range of possible outcomes and make estimates more stable.",
+}
 
 # -----------------------------
 # Story
@@ -747,9 +784,31 @@ BADGE_DESCRIPTIONS = [
 
 CONSOLATION_FRACTION = 0.5  # XP fraction awarded for a correct answer on the final attempt
 
-def format_feedback(message, explanation=None):
+def shuffled_options(key, options):
+    """Stable per-user option order so answers are randomized without rerun jitter."""
+    shuffled = list(options)
+    seed = f"{st.session_state.get('pid', 'anonymous')}|{key}"
+    random.Random(seed).shuffle(shuffled)
+    return shuffled
+
+def answer_radio(label, options, key, **kwargs):
+    return st.radio(label, shuffled_options(key, options), key=key, **kwargs)
+
+def format_correct_feedback(message, explanation=None):
     if explanation:
-        return f"{message}\n\n**Why:** {explanation}"
+        return f"{message}\n\n**Why this is correct:** {explanation}"
+    return message
+
+def format_wrong_feedback(message, answer, correct_answer=None, explanation=None):
+    details = []
+    if answer is not None and correct_answer is not None:
+        details.append(f"**Why this is wrong:** You chose **{answer}**, but the best answer is **{correct_answer}**.")
+    elif answer is not None:
+        details.append(f"**Why this is wrong:** **{answer}** is not the best choice here.")
+    if explanation:
+        details.append(f"**Why the correct answer works:** {explanation}")
+    if details:
+        return f"{message}\n\n" + "\n\n".join(details)
     return message
 
 def score_answer(pid, level, challenge, answer, correct, base=20, correct_answer=None, explanation=None):
@@ -771,21 +830,21 @@ def score_answer(pid, level, challenge, answer, correct, base=20, correct_answer
             add_attempt(pid, level, challenge, answer, True, points)
             set_answer_feedback(
                 "success",
-                format_feedback(f"✅ Correct answer! +{points} XP (partial credit on your last try)", explanation),
+                format_correct_feedback(f"✅ Correct answer! +{points} XP (partial credit on your last try)", explanation),
                 balloons=True,
             )
         elif attempt_number > MAX_WRONG_ATTEMPTS:
             add_attempt(pid, level, challenge, answer, True, 0)
             set_answer_feedback(
                 "success",
-                format_feedback("✅ Correct answer! No XP because the scoring attempts were already used, but this question is now complete.", explanation),
+                format_correct_feedback("✅ Correct answer! No XP because the scoring attempts were already used, but this question is now complete.", explanation),
                 balloons=True,
             )
         else:
             add_attempt(pid, level, challenge, answer, True, base)
             set_answer_feedback(
                 "success",
-                format_feedback(f"✅ Correct answer! +{base} XP", explanation),
+                format_correct_feedback(f"✅ Correct answer! +{base} XP", explanation),
                 balloons=True,
             )
         st.rerun()
@@ -794,17 +853,21 @@ def score_answer(pid, level, challenge, answer, correct, base=20, correct_answer
         remaining = MAX_WRONG_ATTEMPTS - attempt_number
         if remaining > 0:
             consolation = max(5, int(base * CONSOLATION_FRACTION))
-            message = format_feedback(
+            message = format_wrong_feedback(
                 f"❌ Not quite. {remaining} attempt(s) left "
                 f"— a correct answer next time earns partial credit (+{consolation} XP).",
+                answer,
+                correct_answer,
                 explanation,
             )
             set_answer_feedback("warning", message)
             st.warning(message)
         else:
             reveal = f" The correct answer was **{correct_answer}**." if correct_answer is not None else ""
-            message = format_feedback(
+            message = format_wrong_feedback(
                 f"❌ Not quite. Scoring attempts are used, so this challenge is now worth 0 XP.{reveal} Keep trying until you answer correctly to unlock the next page.",
+                answer,
+                correct_answer,
                 explanation,
             )
             set_answer_feedback("error", message)
@@ -1014,6 +1077,7 @@ if selected == "🧭 Diagnostic Check-In":
         pre_correct, pre_total = assessment_score(pid, "pre")
         st.success(f"Baseline recorded: {pre_correct}/{pre_total} correct before training.")
         st.caption("This didn't affect your XP — it just gives us something to compare against once you finish.")
+        show_assessment_review(pid, "pre")
     else:
         st.info(
             "Answer these 5 quick questions before you head out to Meanhaven Station. "
@@ -1022,7 +1086,7 @@ if selected == "🧭 Diagnostic Check-In":
         with st.form("pre_assessment_form"):
             pre_answers = {}
             for key, prompt, options, _ in ASSESSMENT_QUESTIONS:
-                pre_answers[key] = st.radio(prompt, options, key=f"pre_{key}", index=None)
+                pre_answers[key] = answer_radio(prompt, options, key=f"pre_{key}", index=None)
             pre_submitted = st.form_submit_button("Submit baseline check-in", type="primary")
         if pre_submitted:
             if any(value is None for value in pre_answers.values()):
@@ -1104,7 +1168,7 @@ elif selected == "🎯 Level 1 — Meanhaven Station":
     a.metric("New mean", f"{np.mean(changed):.2f}")
     b.metric("New median", f"{np.median(changed):.2f}")
 
-    q = st.radio(
+    q = answer_radio(
         "Which statistic is affected more by the extreme outlier?",
         ["Mean", "Median", "Mode"],
         key="l1q1"
@@ -1118,7 +1182,7 @@ elif selected == "🎯 Level 1 — Meanhaven Station":
 
     st.subheader("Challenge 2 — Pick the Better Center")
     st.write("A hospital reports patient waiting times with a few extremely long delays.")
-    q2 = st.radio(
+    q2 = answer_radio(
         "Which measure would usually be more resistant to those extreme values?",
         ["Mean","Median","Range"],
         key="l1q2"
@@ -1132,7 +1196,7 @@ elif selected == "🎯 Level 1 — Meanhaven Station":
 
     st.subheader("🎁 Bonus Challenge — Make-Up XP")
     st.caption("Needed a retry above? Answer this for a chance to earn the XP back.")
-    q3 = st.radio(
+    q3 = answer_radio(
         "A dataset is symmetric (bell-shaped) with no outliers. How do its mean and median compare?",
         ["They are approximately equal","The mean is always much larger","The median is undefined"],
         key="l1q3"
@@ -1163,7 +1227,7 @@ elif selected == "📏 Level 2 — Spreadmoor Yards":
     })
     st.dataframe(df, hide_index=True, width="stretch")
 
-    q = st.radio(
+    q = answer_radio(
         "Both machines have the same mean. Which machine is more consistent?",
         ["Machine A","Machine B","They are equally consistent"],
         key="l2q1"
@@ -1183,7 +1247,7 @@ elif selected == "📏 Level 2 — Spreadmoor Yards":
     chart = pd.DataFrame({"Frequency": hist[0]}, index=np.round(hist[1][:-1],1))
     st.bar_chart(chart)
 
-    q2 = st.radio(
+    q2 = answer_radio(
         "As standard deviation increases, what happens to the distribution?",
         ["It becomes more spread out","It becomes narrower","The mean must increase"],
         key="l2q2"
@@ -1197,7 +1261,7 @@ elif selected == "📏 Level 2 — Spreadmoor Yards":
 
     st.subheader("🎁 Bonus Challenge — Make-Up XP")
     st.caption("Needed a retry above? Answer this for a chance to earn the XP back.")
-    q3 = st.radio(
+    q3 = answer_radio(
         "Which quantity is the square of the standard deviation?",
         ["Variance","Mean","Median"],
         key="l2q3"
@@ -1239,7 +1303,7 @@ elif selected == "🎲 Level 3 — Distribution Junction":
 
     for i,(cid,prompt,opts,correct) in enumerate(questions,1):
         st.markdown(f"**Junction Track {i}:** {prompt}")
-        ans = st.radio("Choose:", opts, key=cid)
+        ans = answer_radio("Choose:", opts, key=cid)
         if st.button("Route signal", key=f"{cid}_submit"):
             score_answer(
                 pid,3,cid,ans,ans==correct,20,
@@ -1250,7 +1314,7 @@ elif selected == "🎲 Level 3 — Distribution Junction":
     st.subheader("🎁 Bonus Track — Make-Up XP")
     st.caption("Needed a retry on one of the tracks above? Route this one for a chance to earn the XP back.")
     st.markdown("**Bonus Track:** The time between machine breakdowns is continuous and memoryless.")
-    ans5 = st.radio("Choose:", ["Exponential","Binomial","Uniform"], key="L3_BONUS")
+    ans5 = answer_radio("Choose:", ["Exponential","Binomial","Uniform"], key="L3_BONUS")
     if st.button("Route signal", key="L3_BONUS_submit"):
         score_answer(
             pid,3,"L3_BONUS",ans5,ans5=="Exponential",20,
@@ -1277,7 +1341,7 @@ elif selected == "✈️ Level 4 — Arrivals Terminal":
     values, freq = np.unique(counts, return_counts=True)
     st.bar_chart(pd.DataFrame({"Frequency":freq}, index=values))
 
-    q1 = st.radio(
+    q1 = answer_radio(
         "Which distribution models the NUMBER of passengers arriving in a fixed interval?",
         ["Poisson","Exponential","Normal"],
         key="l4q1"
@@ -1292,7 +1356,7 @@ elif selected == "✈️ Level 4 — Arrivals Terminal":
     mean_wait = 10/rate
     st.metric("Implied mean interarrival time", f"{mean_wait:.2f} min")
 
-    q2 = st.radio(
+    q2 = answer_radio(
         "Which distribution can model the TIME until the next passenger arrives?",
         ["Binomial","Exponential","Uniform"],
         key="l4q2"
@@ -1306,7 +1370,7 @@ elif selected == "✈️ Level 4 — Arrivals Terminal":
 
     st.subheader("🎁 Bonus Challenge — Make-Up XP")
     st.caption("Needed a retry above? Answer this for a chance to earn the XP back.")
-    q3 = st.radio(
+    q3 = answer_radio(
         "If the average arrival rate doubles, what happens to the expected interarrival time (1/rate)?",
         ["It is halved","It doubles","It stays the same"],
         key="l4q3"
@@ -1355,7 +1419,7 @@ elif selected == "🏆 Level 5 — Simulation Lab":
     hist = np.histogram(workloads, bins=min(30,max(5,int(math.sqrt(runs)))))
     st.bar_chart(pd.DataFrame({"Frequency":hist[0]}, index=np.round(hist[1][:-1],1)))
 
-    q1 = st.radio(
+    q1 = answer_radio(
         "What usually happens to a Monte Carlo estimate as the number of runs increases?",
         [
             "It generally becomes more stable",
@@ -1372,7 +1436,7 @@ elif selected == "🏆 Level 5 — Simulation Lab":
             explanation="More Monte Carlo runs average out random noise, so the estimate usually changes less from run to run.",
         )
 
-    q2 = st.radio(
+    q2 = answer_radio(
         "Why run Monte Carlo repeatedly instead of using only one random simulation?",
         [
             "To study the range and likelihood of possible outcomes",
@@ -1391,7 +1455,7 @@ elif selected == "🏆 Level 5 — Simulation Lab":
 
     st.subheader("🎁 Bonus Challenge — Make-Up XP")
     st.caption("Needed a retry above? Answer this for a chance to earn the XP back.")
-    q3 = st.radio(
+    q3 = answer_radio(
         "What best describes a 'variance reduction' technique in Monte Carlo simulation?",
         [
             "A method to get more precise estimates with fewer runs",
@@ -1429,6 +1493,7 @@ elif selected == "📊 Mastery Check-Out":
         a.metric("Baseline", f"{pre_correct}/{pre_total}")
         b.metric("Check-out", f"{post_correct}/{post_total}")
         c.metric("Change", f"+{gain}" if gain >= 0 else str(gain))
+        show_assessment_review(pid, "post")
     else:
         st.info(
             "Same five questions as the baseline. Still ungraded and no XP effect."
@@ -1436,7 +1501,7 @@ elif selected == "📊 Mastery Check-Out":
         with st.form("post_assessment_form"):
             post_answers = {}
             for key, prompt, options, _ in ASSESSMENT_QUESTIONS:
-                post_answers[key] = st.radio(prompt, options, key=f"post_{key}", index=None)
+                post_answers[key] = answer_radio(prompt, options, key=f"post_{key}", index=None)
             post_submitted = st.form_submit_button("Submit check-out", type="primary")
         if post_submitted:
             if any(value is None for value in post_answers.values()):
