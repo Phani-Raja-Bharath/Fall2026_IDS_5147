@@ -1,4 +1,4 @@
-import numpy as np
+﻿import numpy as np
 import streamlit as st
 
 
@@ -6,7 +6,6 @@ def render(ctx):
     pid = ctx.pid
     st.header(ctx.STORY["levels"][1])
     ctx.show_youtube_resources("level_1")
-    ctx.show_level_progress(pid, 1)
     ctx.show_level_1_formulas()
     st.write(ctx.content_get(
         "level_copy.level_1_intro",
@@ -51,7 +50,7 @@ def render(ctx):
         st.caption(f"Observation recorded: {observed}")
 
     q = ctx.answer_radio(
-        ctx.content_get("level_copy.level_1_q1", "Which **measure of center** changes the most because of the **very large outlier**?"),
+        ctx.content_get("level_copy.level_1_q1", "Which statistic for the **typical commute time** changes the most because of the **very large outlier**?"),
         ["Mean", "Median", "Mode", "They all change equally"],
         key="l1q1",
     )
@@ -158,4 +157,5 @@ def render(ctx):
             )
     else:
         st.caption("Unlocks if you miss a question above.")
+    ctx.show_level_progress(pid, 1)
     ctx.show_next_button()

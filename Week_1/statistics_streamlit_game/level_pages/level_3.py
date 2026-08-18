@@ -1,11 +1,10 @@
-import streamlit as st
+﻿import streamlit as st
 
 
 def render(ctx):
     pid = ctx.pid
     st.header(ctx.STORY["levels"][3])
     ctx.show_youtube_resources("level_3")
-    ctx.show_level_progress(pid, 3)
     st.write("Review all six distributions here. Then pick the distribution that matches each situation.")
     ctx.show_distribution_reference()
 
@@ -16,13 +15,13 @@ def render(ctx):
         ("L3_Q4", "Every value between **0 and 100** is **equally likely**", ["Poisson", "Uniform", "Exponential", "Binomial"], "Uniform"),
     ]
     explanations = {
-        "L3_Q1": "Normal values cluster around a center.",
+        "L3_Q1": "Normal values cluster around an average.",
         "L3_Q2": "Bernoulli is for one yes/no trial.",
         "L3_Q3": "Binomial counts successes across fixed yes/no trials.",
         "L3_Q4": "Uniform gives every value in the range the same chance.",
     }
     hints = {
-        "L3_Q1": "Does the value cluster around a center, or is it spread evenly across a range?",
+        "L3_Q1": "Do the values cluster around an average, or are they spread evenly across a range?",
         "L3_Q2": "This describes exactly one trial with two possible outcomes.",
         "L3_Q3": "You're counting successes across a fixed number of separate yes/no trials.",
         "L3_Q4": "No value in the range is any more likely than another.",
@@ -70,4 +69,5 @@ def render(ctx):
             )
     else:
         st.caption("Unlocks if you miss a question above.")
+    ctx.show_level_progress(pid, 3)
     ctx.show_next_button()

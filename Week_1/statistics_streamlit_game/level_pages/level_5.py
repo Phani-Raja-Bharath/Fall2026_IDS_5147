@@ -1,4 +1,4 @@
-import math
+﻿import math
 
 import numpy as np
 import pandas as pd
@@ -9,7 +9,6 @@ def render(ctx):
     pid = ctx.pid
     st.header(ctx.STORY["levels"][5])
     ctx.show_youtube_resources("level_5")
-    ctx.show_level_progress(pid, 5)
     st.write("Airport security workload depends on how many passengers arrive and how long each one takes.")
     st.info("A fixed model gives one answer. A random simulation gives many possible answers, so you can see risk.")
 
@@ -60,6 +59,7 @@ def render(ctx):
         st.caption(f"Observation recorded: {observed}")
 
     st.subheader("Question 1")
+    ctx.show_challenge_acknowledgement(pid, "L5_STABILITY")
     q1 = ctx.answer_radio(
         "What usually happens to a **Monte Carlo estimate** as the **number of runs** increases?",
         [
@@ -70,7 +70,6 @@ def render(ctx):
         ],
         key="l5q1",
     )
-    ctx.show_challenge_acknowledgement(pid, "L5_STABILITY")
     if st.button("Submit answer", key="l5submit1"):
         ctx.score_answer(
             pid,
@@ -84,6 +83,7 @@ def render(ctx):
         )
 
     st.subheader("Question 2")
+    ctx.show_challenge_acknowledgement(pid, "L5_PURPOSE")
     q2 = ctx.answer_radio(
         "Why run **Monte Carlo** many times instead of using **one random simulation**?",
         [
@@ -94,7 +94,6 @@ def render(ctx):
         ],
         key="l5q2",
     )
-    ctx.show_challenge_acknowledgement(pid, "L5_PURPOSE")
     if st.button("Submit final answer", key="l5submit2"):
         ctx.score_answer(
             pid,
@@ -138,4 +137,5 @@ def render(ctx):
     ctx.show_boss_progress(ctx.xp)
     if ctx.xp >= ctx.PERFECT_SCORE:
         st.markdown(ctx.STORY["epilogue"])
+    ctx.show_level_progress(pid, 5)
     ctx.show_next_button()

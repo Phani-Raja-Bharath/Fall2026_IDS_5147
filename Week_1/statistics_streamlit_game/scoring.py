@@ -83,7 +83,7 @@ CHALLENGE_NAMES = {
 
 BADGE_DESCRIPTIONS = [
     ("🎒 Rookie Modeler", "0-49 XP", "Getting started."),
-    ("⭐ Stats Explorer", "50-109 XP", "Understands center and basic spread."),
+    ("⭐ Stats Explorer", "50-109 XP", "Understands typical values and basic spread."),
     ("🥉 Variability Scout", "110-179 XP", "Can compare spread and distributions."),
     ("🥈 Distribution Strategist", "180-249 XP", "Can match distributions to situations."),
     ("🥇 Monte Carlo Master", "250-504 XP", "Can reason about simulation results."),

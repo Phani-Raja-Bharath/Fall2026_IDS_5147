@@ -1,4 +1,4 @@
-import numpy as np
+﻿import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -7,7 +7,6 @@ def render(ctx):
     pid = ctx.pid
     st.header(ctx.STORY["levels"][2])
     ctx.show_youtube_resources("level_2")
-    ctx.show_level_progress(pid, 2)
     st.info(ctx.content_get("level_copy.level_2_focus", "This challenge is about **spread**: how close together or far apart the values are."))
     ctx.show_level_2_formulas()
     st.write(ctx.content_get(
@@ -45,7 +44,7 @@ def render(ctx):
                 "Sample SD": [machine_a.std(ddof=1), machine_b.std(ddof=1)],
             })
             st.dataframe(df, hide_index=True, width="stretch")
-            st.info(ctx.content_get("level_copy.level_2_reveal", "Same center. Different variability."))
+            st.info(ctx.content_get("level_copy.level_2_reveal", "Same mean. Different variability."))
 
     st.subheader("Question 2")
     ctx.show_challenge_acknowledgement(pid, "L2_SD")
@@ -110,4 +109,5 @@ def render(ctx):
             )
     else:
         st.caption("Unlocks if you miss a question above.")
+    ctx.show_level_progress(pid, 2)
     ctx.show_next_button()

@@ -31,7 +31,7 @@
         "5": "Very comfortable"
       },
       "items": [
-        "Finding a useful center for a dataset",
+        "Finding a useful typical value for a dataset",
         "Understanding how spread out data is",
         "Choosing a probability distribution for a situation",
         "Understanding random arrivals and waiting times",
@@ -60,7 +60,7 @@
         "5": "Very comfortable"
       },
       "items": [
-        "Finding a useful center for a dataset",
+        "Finding a useful typical value for a dataset",
         "Understanding how spread out data is",
         "Choosing a probability distribution for a situation",
         "Understanding random arrivals and waiting times",
@@ -81,7 +81,7 @@
       {
         "title": "Mean, median, and mode",
         "url": "https://youtu.be/FLqp7tUPeEY?si=Vtz0C98GLZUIkWha",
-        "description": "A quick refresher on different ways to describe the center of data."
+        "description": "A quick refresher on different ways to describe a typical value in data."
       }
     ],
     "level_2": [
@@ -95,7 +95,7 @@
       {
         "title": "Normal distribution",
         "url": "https://youtu.be/hE2Gj3VOAKo?si=WjzQecIrxfALN4VS",
-        "description": "See what it means for values to cluster around a center."
+        "description": "See what it means for values to cluster around an average."
       },
       {
         "title": "Uniform distribution",
@@ -137,7 +137,7 @@
   },
 
   "hints": {
-    "L3_Q1": "Does the value cluster around a center, or is it spread evenly across a range?",
+    "L3_Q1": "Do the values cluster around an average, or are they spread evenly across a range?",
     "L3_Q2": "This describes exactly one trial with two possible outcomes.",
     "L3_Q3": "You're counting successes across a fixed number of separate yes/no trials.",
     "L3_Q4": "No value in the range is any more likely than another.",
@@ -163,7 +163,7 @@
     "level_1_observe": "Did that match what you expected?",
     "level_1_outlier_input": "Enter a **very large outlier** to replace the final commute time",
     "level_1_outlier_caption": "Try values like 90, 200, or 600 and watch the statistics change.",
-    "level_1_q1": "Which **measure of center** changes the most because of the **very large outlier**?",
+    "level_1_q1": "Which statistic for the **typical commute time** changes the most because of the **very large outlier**?",
     "level_1_q1_explanation": "The mean uses every value, so one very large value pulls it up.",
     "level_1_transition": "Let's see if the same idea holds somewhere else.",
     "level_1_hospital_intro": "A hospital usually sees wait times close to 10 minutes.",
@@ -176,7 +176,7 @@
     "level_1_bonus_explanation": "Range is maximum minus minimum. If the maximum gets larger and the minimum stays the same, the range increases.",
     "level_2_focus": "This challenge is about **spread**: how close together or far apart the values are.",
     "level_2_intro": "Two machines make parts near 10 units. Look at the values first, then decide which machine is more consistent.",
-    "level_2_reveal": "Same center. Different variability.",
+    "level_2_reveal": "Same mean. Different variability.",
     "level_2_q1": "Both machines have the same **mean**. Which machine is more **consistent**?",
     "level_2_q1_explanation": "Machine A's values stay closer to 10, so its standard deviation is smaller.",
     "level_2_prediction": "Before you move the slider: what do you think increasing standard deviation from 5 to 20 will do?",

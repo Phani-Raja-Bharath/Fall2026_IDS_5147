@@ -214,6 +214,12 @@ div[data-testid="stRadio"] > label {
     color: #1e3a8a;
 }
 
+.challenge-status-unanswered {
+    border-color: #2563eb;
+    background: #eff6ff;
+    color: #1e3a8a;
+}
+
 .big-score {
     font-size: clamp(1.5rem, 5vw, 2rem);
     font-weight: 800;
@@ -518,7 +524,7 @@ def show_assessment_review(pid, phase):
 # hospital/machine/airport examples used during the levels, so the check-out
 # measures transfer of the concept instead of memory of the training example.
 ASSESSMENT_QUESTIONS = [
-    ("CENTER", "A small bakery tracks daily sales. One holiday saw sales **ten times higher** than a normal day. Which **center** is most affected by that one unusual day?",
+    ("CENTER", "A small bakery tracks daily sales. One holiday saw sales **ten times higher** than a normal day. Which **typical-value statistic** is most affected by that one unusual day?",
      ["Mean", "Median", "Mode", "Range"], "Mean"),
     ("SPREAD", "Two delivery drivers each average **30 minutes** per route. Which statistic tells you whose delivery times are more **consistent**?",
      ["Standard deviation", "Median", "Mode", "Sample size"], "Standard deviation"),
@@ -555,7 +561,7 @@ _DEFAULT_CONFIDENCE_SCALE = {
     "5": "Very comfortable",
 }
 _DEFAULT_CONFIDENCE_ITEMS = [
-    "Finding a useful center for a dataset",
+    "Finding a useful typical value for a dataset",
     "Understanding how spread out data is",
     "Choosing a probability distribution for a situation",
     "Understanding random arrivals and waiting times",
@@ -604,7 +610,7 @@ SELF_ASSESSMENT_VALUES = confidence_value_lookup()
 STORY = {
     "intro": (
         "**Welcome to StatsQuest.** This is a short game about statistics for modeling and simulation.\n\n"
-        "**Your mission:** help a simulation team make decisions from data. You will practice center, "
+        "**Your mission:** help a simulation team make decisions from data. You will practice typical values, "
         "spread, distributions, arrivals, and Monte Carlo simulation.\n\n"
         "Start with a quick confidence check-in. Then play each level, earn XP, and unlock the next step. "
         "The final check-out shows what changed. Check-ins do not affect XP."
@@ -640,7 +646,7 @@ YOUTUBE_RESOURCES = {
         (
             "Mean, median, and mode",
             "https://www.youtube.com/watch?v=5gxzPkAQdIg",
-            "Shows how to find the center of data and why median can help with outliers.",
+            "Shows how to find a typical value in data and why median can help with outliers.",
         ),
     ],
     "level_2": [
@@ -1183,6 +1189,11 @@ def show_challenge_acknowledgement(pid, challenge):
 
     history = challenge_history(pid, challenge)
     if history.empty:
+        show_challenge_status_box(
+            "unanswered",
+            "Unanswered",
+            f"{challenge_label(challenge)} has not been answered yet.",
+        )
         return
 
     correct_rows = history.loc[history["correct"] == 1]
@@ -1871,3 +1882,11 @@ elif selected == "🥇 Leaderboard":
             width="stretch"
         )
     show_next_button()
+    st.success("You have reached the end of StatsQuest.")
+    st.info("Before exiting, save a screenshot of this Leaderboard page and share it with your TA or professor.")
+    if st.button("Exit application", type="primary", width="stretch"):
+        st.session_state.logged = False
+        st.session_state.is_admin = False
+        st.session_state.selected_page = PAGE_OPTIONS[0]
+        st.session_state.answer_feedback = None
+        st.rerun()

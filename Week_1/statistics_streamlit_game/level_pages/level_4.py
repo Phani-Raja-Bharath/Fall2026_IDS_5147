@@ -1,4 +1,4 @@
-import numpy as np
+﻿import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -7,7 +7,6 @@ def render(ctx):
     pid = ctx.pid
     st.header(ctx.STORY["levels"][4])
     ctx.show_youtube_resources("level_4")
-    ctx.show_level_progress(pid, 4)
     st.write(
         "An airport wants to model passengers arriving at security. Use Poisson for the number of arrivals "
         "and Exponential for the time between arrivals."
@@ -46,12 +45,12 @@ def render(ctx):
         st.caption(f"Observation recorded: {observed}")
 
     st.subheader("Question 1")
+    ctx.show_challenge_acknowledgement(pid, "L4_POISSON")
     q1 = ctx.answer_radio(
         "Which distribution models the **number of passengers** arriving in a **fixed time**?",
         ["Poisson", "Exponential", "Normal", "Bernoulli"],
         key="l4q1",
     )
-    ctx.show_challenge_acknowledgement(pid, "L4_POISSON")
     ctx.show_optional_hint("L4_POISSON", "You are counting how many passengers arrive during a fixed 10-minute block.")
     if st.button("Lock count answer", key="l4submit1"):
         ctx.score_answer(
@@ -66,12 +65,12 @@ def render(ctx):
         )
 
     st.subheader("Question 2")
+    ctx.show_challenge_acknowledgement(pid, "L4_EXP")
     q2 = ctx.answer_radio(
         "Which distribution models the **time until the next passenger** arrives?",
         ["Binomial", "Exponential", "Uniform", "Poisson"],
         key="l4q2",
     )
-    ctx.show_challenge_acknowledgement(pid, "L4_EXP")
     ctx.show_optional_hint("L4_EXP", "You are measuring the gap in time before one single passenger shows up next.")
     if st.button("Lock waiting-time answer", key="l4submit2"):
         ctx.score_answer(
@@ -107,4 +106,5 @@ def render(ctx):
             )
     else:
         st.caption("Unlocks if you miss a question above.")
+    ctx.show_level_progress(pid, 4)
     ctx.show_next_button()
