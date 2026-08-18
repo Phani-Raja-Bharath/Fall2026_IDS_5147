@@ -20,7 +20,12 @@
       "Bash(git diff *)",
       "Bash(timeout 90 python -u /c/Users/phani/AppData/Local/Temp/at_admin_test.py)",
       "Bash(python3)",
-      "Bash(python)"
+      "Bash(python)",
+      "Bash(timeout 150 python -u /c/Users/phani/AppData/Local/Temp/at_rewrite_test.py)",
+      "Bash(python -m pyright Week_1/statistics_streamlit_game/app.py Week_1/statistics_streamlit_game/content_loader.py Week_1/statistics_streamlit_game/db.py Week_1/statistics_streamlit_game/navigation.py Week_1/statistics_streamlit_game/scoring.py Week_1/statistics_streamlit_game/level_pages/*.py)",
+      "Bash(python -m pyright Week_1/statistics_streamlit_game/db.py Week_1/statistics_streamlit_game/app.py)",
+      "Bash(python -m pyright Week_1/statistics_streamlit_game/app.py Week_1/statistics_streamlit_game/db.py Week_1/statistics_streamlit_game/content_loader.py Week_1/statistics_streamlit_game/navigation.py Week_1/statistics_streamlit_game/scoring.py Week_1/statistics_streamlit_game/level_pages/*.py)",
+      "Bash(timeout 100 python -u /c/Users/phani/AppData/Local/Temp/at_pyright_verify.py)"
     ]
   }
 }
