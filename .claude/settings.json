@@ -17,7 +17,10 @@
       "Bash(timeout 90 python -u /c/Users/phani/AppData/Local/Temp/at_feedback_test.py)",
       "Bash(timeout 90 python -u /c/Users/phani/AppData/Local/Temp/at_leak_test.py)",
       "Bash(where psql *)",
-      "Bash(git diff *)"
+      "Bash(git diff *)",
+      "Bash(timeout 90 python -u /c/Users/phani/AppData/Local/Temp/at_admin_test.py)",
+      "Bash(python3)",
+      "Bash(python)"
     ]
   }
 }
