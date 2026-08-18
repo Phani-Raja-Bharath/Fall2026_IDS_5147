@@ -1,18 +1,61 @@
-import json
-import math
+﻿import json
 import os
 import random
-import sqlite3
-import threading
-from datetime import datetime
+import re
+import html
+from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
+
+from content_loader import get_content, load_content, missing_required_keys, split_markdown_title
+from db import (
+    add_attempt,
+    configure_database,
+    conn,
+    ensure_schema,
+    find_participant_pid_by_name,
+    leaderboard,
+    level_score,
+    make_pid,
+    participant_stats,
+    register_participant,
+    sql,
+    total_xp,
+)
+import navigation
+from navigation import PAGE_LEVELS, PAGE_OPTIONS
+from level_pages.level_1 import render as render_level_1
+from level_pages.level_2 import render as render_level_2
+from level_pages.level_3 import render as render_level_3
+from level_pages.level_4 import render as render_level_4
+from level_pages.level_5 import render as render_level_5
+from scoring import (
+    BADGE_DESCRIPTIONS,
+    CHALLENGE_POINTS,
+    CONSOLATION_FRACTION,
+    LEVEL_CHALLENGES,
+    LEVEL_REQUIRED_CHALLENGES,
+    LEVELS,
+    MAX_WRONG_ATTEMPTS,
+    PERFECT_SCORE,
+    badge_for_xp,
+    boss_defeated_percent,
+    challenge_label,
+    challenge_labels,
+)
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DB = os.path.join(APP_DIR, "stats_game.db")
+CONTENT_FILE = os.path.join(APP_DIR, "content.json")
+
+CONTENT = load_content(CONTENT_FILE)
+CONTENT_ISSUES = missing_required_keys(CONTENT)
+
+def content_get(path: str, default: Any = "") -> Any:
+    return get_content(CONTENT, path, default)
 
 def get_secret(name):
     value = os.environ.get(name)
@@ -27,7 +70,7 @@ DATABASE_URL = get_secret("DATABASE_URL") or get_secret("NEON_DATABASE_URL")
 _ADMIN_PASSWORD_SECRET = get_secret("STATSQUEST_ADMIN_PASSWORD")
 ADMIN_PASSWORD = _ADMIN_PASSWORD_SECRET or "changeme123"
 ADMIN_PASSWORD_IS_DEFAULT = not _ADMIN_PASSWORD_SECRET
-USE_POSTGRES = bool(DATABASE_URL)
+configure_database(DB, DATABASE_URL)
 
 st.set_page_config(
     page_title="StatsQuest: Modeling & Simulation",
@@ -76,6 +119,56 @@ st.markdown("""
     border-radius: 8px;
     padding: 14px;
     margin-bottom: 10px;
+}
+
+div[data-testid="stRadio"] {
+    border: 1px solid rgba(37, 99, 235, .22);
+    border-left: 6px solid #2563eb;
+    border-radius: 8px;
+    padding: 14px 16px 12px;
+    margin: 12px 0 10px;
+    background: #f8fafc;
+}
+
+div[data-testid="stRadio"] > label {
+    font-weight: 700;
+}
+
+.challenge-status {
+    border: 1.5px solid;
+    border-left-width: 6px;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 8px 0 14px;
+}
+
+.challenge-status-title {
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.challenge-status-correct {
+    border-color: #16a34a;
+    background: #f0fdf4;
+    color: #14532d;
+}
+
+.challenge-status-one-wrong {
+    border-color: #d97706;
+    background: #fffbeb;
+    color: #78350f;
+}
+
+.challenge-status-two-wrong {
+    border-color: #dc2626;
+    background: #fef2f2;
+    color: #7f1d1d;
+}
+
+.challenge-status-info {
+    border-color: #2563eb;
+    background: #eff6ff;
+    color: #1e3a8a;
 }
 
 .big-score {
@@ -210,302 +303,24 @@ div[data-testid="stDownloadButton"] > button[kind="primary"]:hover {
 """, unsafe_allow_html=True)
 
 # -----------------------------
-# Database
+# Database-derived progress helpers
 # -----------------------------
-def sql(sqlite_sql, postgres_sql=None):
-    if USE_POSTGRES:
-        return postgres_sql or sqlite_sql.replace("?", "%s")
-    return sqlite_sql
-
-class DBConnection:
-    """sqlite3.Connection-shaped wrapper over either the shared cached SQLite
-    connection or a pooled Postgres connection, so the rest of the app stays
-    agnostic to which backend is active.
-
-    The underlying connection/pool is created once per process (see
-    `_sqlite_connection` / `_postgres_pool` below) and reused across reruns
-    instead of opening a brand-new network connection on every query.
-    `close()` releases the connection back to its pool (Postgres) or is a
-    no-op (SQLite, where the connection is long-lived) — callers keep calling
-    it exactly as before.
-    """
-
-    def __init__(self, raw, *, lock=None, pool=None):
-        self._raw = raw
-        self._lock = lock
-        self._pool = pool
-
-    def _replace_postgres_connection(self):
-        if self._pool is None:
-            return False
-        try:
-            self._pool.putconn(self._raw, close=True)
-        except Exception:
-            pass
-        self._raw = self._pool.getconn()
-        return True
-
-    def _is_postgres_connection_error(self, error):
-        if self._pool is None:
-            return False
-        import psycopg2
-        return isinstance(error, (psycopg2.OperationalError, psycopg2.InterfaceError))
-
-    def execute(self, query, params=None):
-        if self._lock is not None:
-            with self._lock:
-                return self._raw.execute(query, params or ())
-        try:
-            cursor = self._raw.cursor()
-            cursor.execute(query, params or ())
-            return cursor
-        except Exception as error:
-            if not self._is_postgres_connection_error(error):
-                raise
-            self._replace_postgres_connection()
-            cursor = self._raw.cursor()
-            cursor.execute(query, params or ())
-            return cursor
-
-    def cursor(self):
-        return self._raw.cursor()
-
-    def read_sql(self, query, params=None):
-        """pandas.read_sql_query, but routed through the same write lock as
-        execute()/commit(). pandas drives a non-SQLAlchemy connection via its
-        own .cursor()/.execute() calls, which would otherwise bypass the lock
-        entirely and let reads interleave with writes on the one shared
-        SQLite connection."""
-        if self._lock is not None:
-            with self._lock:
-                return pd.read_sql_query(query, self._raw, params=params)
-        return pd.read_sql_query(query, self._raw, params=params)
-
-    def commit(self):
-        if self._lock is not None:
-            with self._lock:
-                self._raw.commit()
-        else:
-            try:
-                self._raw.commit()
-            except Exception as error:
-                if not self._is_postgres_connection_error(error):
-                    raise
-                self._replace_postgres_connection()
-                raise RuntimeError("Database connection was reset before commit. Please submit again.") from error
-
-    def close(self):
-        if self._pool is not None:
-            self._pool.putconn(self._raw)
-        # else: the shared SQLite connection stays open for the app's lifetime.
-
-_sqlite_write_lock = threading.Lock()  # serializes writes on the one shared SQLite connection
-
-@st.cache_resource(show_spinner=False)
-def _sqlite_connection():
-    """A single SQLite connection shared for the app's lifetime instead of
-    reopening the database file on every helper call."""
-    return sqlite3.connect(DB, check_same_thread=False)
-
-@st.cache_resource(show_spinner=False)
-def _postgres_pool():
-    """A small connection pool shared for the app's lifetime instead of
-    opening a new network connection to Postgres on every helper call."""
-    from psycopg2.pool import ThreadedConnectionPool
-    return ThreadedConnectionPool(
-        1,
-        10,
-        DATABASE_URL,
-        keepalives=1,
-        keepalives_idle=30,
-        keepalives_interval=10,
-        keepalives_count=5,
-    )
-
-def conn():
-    if USE_POSTGRES:
-        pool = _postgres_pool()
-        db = DBConnection(pool.getconn(), pool=pool)
-        db.execute("SELECT 1")
-        return db
-    return DBConnection(_sqlite_connection(), lock=_sqlite_write_lock)
-
-@st.cache_resource(show_spinner=False)
-def _ensure_schema():
-    """Create the tables once per process instead of re-running two
-    CREATE TABLE statements on every single conn() call."""
-    c = conn()
-    c.execute(sql("""
-        CREATE TABLE IF NOT EXISTS participants(
-            pid TEXT PRIMARY KEY,
-            first_name TEXT NOT NULL,
-            last_name TEXT NOT NULL,
-            pin TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """))
-    c.execute(sql(
-        """
-        CREATE TABLE IF NOT EXISTS challenge_attempts(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            pid TEXT NOT NULL,
-            level INTEGER NOT NULL,
-            challenge TEXT NOT NULL,
-            answer TEXT,
-            correct INTEGER NOT NULL,
-            points INTEGER NOT NULL,
-            created_at TEXT NOT NULL
-        )
-        """,
-        """
-        CREATE TABLE IF NOT EXISTS challenge_attempts(
-            id SERIAL PRIMARY KEY,
-            pid TEXT NOT NULL,
-            level INTEGER NOT NULL,
-            challenge TEXT NOT NULL,
-            answer TEXT,
-            correct INTEGER NOT NULL,
-            points INTEGER NOT NULL,
-            created_at TEXT NOT NULL
-        )
-        """,
-    ))
-    # Guards against a race where two near-simultaneous submits (e.g. a fast
-    # double-click) both pass the "not yet scored" check in score_answer()
-    # before either has committed: only one row per (pid, challenge) is
-    # allowed to have correct=1, so a second concurrent "correct" insert is
-    # rejected by the database instead of silently doubling the XP.
-    try:
-        c.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_one_correct_per_challenge
-            ON challenge_attempts(pid, challenge)
-            WHERE correct = 1
-        """)
-    except Exception:
-        pass  # pre-existing duplicate data (from before this guard existed) would block index creation
-    c.commit()
-    c.close()
-    return True
-
-def make_pid(first, last, pin):
-    return f"{first.strip().lower()}|{last.strip().lower()}|{pin.strip()}"
-
-def find_participant_pid_by_name(first, last):
-    """Return the pid already registered under this name (any PIN), or None.
-    Used to catch a mistyped PIN before it silently creates a duplicate,
-    zero-XP identity for a returning student."""
-    c = conn()
-    row = c.execute(
-        sql("SELECT pid FROM participants WHERE LOWER(first_name)=? AND LOWER(last_name)=?"),
-        (first.strip().lower(), last.strip().lower())
-    ).fetchone()
-    c.close()
-    return row[0] if row else None
-
-def register_participant(first, last, pin):
-    """Create (or resume) a participant identified by name + PIN. Returns (pid, first_name, last_name)."""
-    pid = make_pid(first, last, pin)
-    c = conn()
-    row = c.execute(
-        sql("SELECT first_name, last_name FROM participants WHERE pid=?"), (pid,)
-    ).fetchone()
-    if row:
-        c.close()
-        return pid, row[0], row[1]
-    c.execute(
-        sql("INSERT INTO participants VALUES(?,?,?,?,?)"),
-        (pid, first.strip(), last.strip(), pin.strip(), datetime.now().isoformat(timespec="seconds"))
-    )
-    c.commit()
-    c.close()
-    return pid, first.strip(), last.strip()
-
-def _is_duplicate_correct_attempt(error):
-    """True if `error` is the unique-constraint violation from
-    idx_one_correct_per_challenge (i.e. this challenge was already scored by
-    a concurrent request), for either backend."""
-    if isinstance(error, sqlite3.IntegrityError):
-        return True
-    if USE_POSTGRES:
-        import psycopg2
-        if isinstance(error, psycopg2.IntegrityError):
-            return True
-    return False
-
-def add_attempt(pid, level, challenge, answer, correct, points):
-    """Records an attempt. Returns False (instead of raising) if a
-    concurrent request already recorded a correct answer for this
-    (pid, challenge) first — see idx_one_correct_per_challenge."""
-    c = conn()
-    try:
-        c.execute(
-            sql("""INSERT INTO challenge_attempts(pid,level,challenge,answer,correct,points,created_at)
-               VALUES(?,?,?,?,?,?,?)"""),
-            (
-                pid, level, challenge, str(answer),
-                1 if correct else 0, int(points),
-                datetime.now().isoformat(timespec="seconds")
-            )
-        )
-        c.commit()
-    except Exception as error:
-        if correct and _is_duplicate_correct_attempt(error):
-            return False
-        raise
-    finally:
-        c.close()
-    return True
-
-def participant_stats(pid):
-    c = conn()
-    df = c.read_sql(
-        sql("SELECT * FROM challenge_attempts WHERE pid=? ORDER BY id"),
-        params=(pid,)
-    )
-    c.close()
-    return df
-
-def leaderboard():
-    c = conn()
-    # Aliases are double-quoted so Postgres preserves their exact case; unquoted
-    # aliases (e.g. `AS PID`) get silently folded to lowercase on Postgres (but
-    # not SQLite), which broke every `board["PID"]`-style lookup below whenever
-    # the app ran against Postgres instead of the local SQLite file.
-    df = c.read_sql("""
-        SELECT p.pid AS "PID",
-               p.first_name || ' ' || p.last_name AS "Name",
-               COALESCE(SUM(a.points),0) AS "XP",
-               COALESCE(SUM(a.correct),0) AS "Correct",
-               COUNT(a.id) AS "Attempts"
-        FROM participants p
-        LEFT JOIN challenge_attempts a ON a.pid=p.pid
-        GROUP BY p.pid
-        ORDER BY "XP" DESC, "Correct" DESC, "Attempts" ASC
-    """)
-    c.close()
-    if not df.empty:
-        df.insert(0, "Rank", range(1, len(df)+1))
-    return df
-
-def level_score(pid, level):
-    df = participant_stats(pid)
-    if df.empty:
-        return 0
-    return int(df[df["level"] == level]["points"].sum())
-
-def total_xp(pid):
-    df = participant_stats(pid)
-    return 0 if df.empty else int(df["points"].sum())
-
-MAX_WRONG_ATTEMPTS = 2  # wrong tries allowed before the answer is revealed and the challenge locks
-
 def challenge_history(pid, challenge):
     df = participant_stats(pid)
     if df.empty:
         return df
     return df[df["challenge"] == challenge]
 
-# -----------------------------
+def record_completion_once(pid, level, challenge, answer):
+    if answer is None or str(answer).strip() == "":
+        return False
+    history = challenge_history(pid, challenge)
+    if not history.empty:
+        return False
+    add_attempt(pid, level, challenge, answer, True, 0)
+    return True
+
+
 # Pre/post learning assessment
 # -----------------------------
 # Reuses the same challenge_attempts table (level 0 = pre, level 6 = post,
@@ -513,24 +328,52 @@ def challenge_history(pid, challenge):
 # Always recorded at 0 XP: these are a diagnostic, not part of the game score.
 
 def assessment_challenge_id(phase, key):
+    """Challenge id for the objective knowledge quiz (ASSESSMENT_QUESTIONS).
+    Only used at the "post" phase today -- there is no pre-course quiz."""
     return f"{'PRE' if phase == 'pre' else 'POST'}_{key}"
+
+def confidence_challenge_id(phase, key):
+    """Challenge id for the 1-5 confidence self-rating (SELF_ASSESSMENT_ITEMS).
+    Kept in its own namespace ("POSTSELF_" rather than "POST_") so the
+    post-course confidence re-rating never collides with the post-course
+    knowledge quiz -- both reuse the same topic keys (CENTER, SPREAD, ...).
+    At the "pre" phase this intentionally matches assessment_challenge_id,
+    since pre-course only ever has the confidence rating, not a quiz."""
+    return f"{'PRE' if phase == 'pre' else 'POSTSELF'}_{key}"
 
 def assessment_level(phase):
     return 0 if phase == "pre" else 6
 
 def record_diagnostic_answer(pid, phase, key, answer, correct):
-    """Record a single, non-retryable diagnostic response."""
+    """Record a single, non-retryable knowledge-quiz response."""
     challenge = assessment_challenge_id(phase, key)
     if not challenge_history(pid, challenge).empty:
         return  # already answered; diagnostic responses aren't retried
     add_attempt(pid, assessment_level(phase), challenge, answer, correct, 0)
 
+def record_confidence_rating(pid, phase, key, answer):
+    """Record a single, non-retryable confidence self-rating."""
+    challenge = confidence_challenge_id(phase, key)
+    if not challenge_history(pid, challenge).empty:
+        return  # already answered; diagnostic responses aren't retried
+    add_attempt(pid, assessment_level(phase), challenge, answer, False, 0)
+
 def assessment_complete(pid, phase):
+    """True once the knowledge quiz (ASSESSMENT_QUESTIONS) is done for this phase."""
     history = participant_stats(pid)
     if history.empty:
         return False
     answered = set(history["challenge"].unique())
     required = {assessment_challenge_id(phase, key) for key, *_ in ASSESSMENT_QUESTIONS}
+    return required.issubset(answered)
+
+def self_assessment_complete(pid, phase):
+    """True once the confidence self-rating (SELF_ASSESSMENT_ITEMS) is done for this phase."""
+    history = participant_stats(pid)
+    if history.empty:
+        return False
+    answered = set(history["challenge"].unique())
+    required = {confidence_challenge_id(phase, key) for key, _ in SELF_ASSESSMENT_ITEMS}
     return required.issubset(answered)
 
 def assessment_score(pid, phase):
@@ -542,12 +385,12 @@ def assessment_score(pid, phase):
     scored = history[history["challenge"].isin(required) & (history["correct"] == 1)]
     return int(scored["challenge"].nunique()), total
 
-def self_assessment_summary(pid):
+def self_assessment_summary(pid, phase="pre"):
     total = len(SELF_ASSESSMENT_ITEMS)
     history = participant_stats(pid)
     if history.empty:
         return None, 0, total
-    required = [assessment_challenge_id("pre", key) for key, _ in SELF_ASSESSMENT_ITEMS]
+    required = [confidence_challenge_id(phase, key) for key, _ in SELF_ASSESSMENT_ITEMS]
     rows = history[history["challenge"].isin(required)].copy()
     if rows.empty:
         return None, 0, total
@@ -556,27 +399,45 @@ def self_assessment_summary(pid):
         return None, 0, total
     return float(scores.mean()), int(scores.count()), total
 
-def show_assessment_review(pid, phase):
+def show_confidence_review(pid, phase):
+    """Card list of a participant's confidence self-ratings for one phase."""
     history = participant_stats(pid)
     if history.empty:
         return
-    if phase == "pre":
-        st.subheader("Baseline self-assessment review")
-        for key, prompt in SELF_ASSESSMENT_ITEMS:
-            challenge = assessment_challenge_id("pre", key)
-            row = history[history["challenge"] == challenge]
-            if row.empty:
-                continue
-            answer = str(row.iloc[-1]["answer"])
-            st.markdown(
-                f"""
-                <div class="level-card">
-                    <b>{prompt}</b><br>
-                    <span>{answer}</span>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+    label = "Baseline" if phase == "pre" else "Check-out"
+    st.subheader(f"{label} self-assessment review")
+    for key, prompt in SELF_ASSESSMENT_ITEMS:
+        challenge = confidence_challenge_id(phase, key)
+        row = history[history["challenge"] == challenge]
+        if row.empty:
+            continue
+        answer = str(row.iloc[-1]["answer"])
+        st.markdown(
+            f"""
+            <div class="level-card">
+                <b>{prompt}</b><br>
+                <span>{answer}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+def show_confidence_change(pid):
+    """Baseline vs check-out confidence, side by side with the rise between them."""
+    pre_avg, _, _ = self_assessment_summary(pid, "pre")
+    post_avg, _, _ = self_assessment_summary(pid, "post")
+    if pre_avg is None or post_avg is None:
+        return
+    delta = post_avg - pre_avg
+    a, b, c = st.columns(3)
+    a.metric("Baseline confidence", f"{pre_avg:.1f}/5")
+    b.metric("Check-out confidence", f"{post_avg:.1f}/5", delta=f"{delta:+.1f}")
+    c.metric("Change", f"{delta:+.1f}")
+
+def show_assessment_review(pid, phase):
+    """Review of the objective knowledge quiz (ASSESSMENT_QUESTIONS, "post" only today)."""
+    history = participant_stats(pid)
+    if history.empty:
         return
     phase_label = "Baseline" if phase == "pre" else "Check-out"
     st.subheader(f"{phase_label} review")
@@ -604,126 +465,35 @@ def show_assessment_review(pid, phase):
         )
 
 # -----------------------------
-# Game config
+# Assessment config
 # -----------------------------
-LEVELS = {
-    1: {"name":"Meanhaven Station", "icon":"🎯"},
-    2: {"name":"Spreadmoor Yards", "icon":"📏"},
-    3: {"name":"Distribution Junction", "icon":"🎲"},
-    4: {"name":"Arrivals Terminal", "icon":"✈️"},
-    5: {"name":"Simulation Lab", "icon":"🏆"},
-}
-
-LEVEL_MAX_POINTS = {
-    1: 75,
-    2: 90,
-    3: 100,
-    4: 105,
-    5: 135,
-}
-PERFECT_SCORE = sum(LEVEL_MAX_POINTS.values())
-
-LEVEL_CHALLENGES = {
-    1: ["L1_OUTLIER", "L1_CENTER", "L1_BONUS"],
-    2: ["L2_CONSISTENCY", "L2_SD", "L2_BONUS"],
-    3: ["L3_Q1", "L3_Q2", "L3_Q3", "L3_Q4", "L3_BONUS"],
-    4: ["L4_POISSON", "L4_EXP", "L4_BONUS"],
-    5: ["L5_STABILITY", "L5_PURPOSE", "L5_BONUS"],
-}
-
-# The "*_BONUS" challenge in each level is presented to players as optional
-# make-up credit, not a requirement — so it's excluded from what gates level
-# completion / page progression. LEVEL_CHALLENGES (above) still lists it,
-# since it's still scoreable and still counts toward LEVEL_MAX_POINTS /
-# PERFECT_SCORE for players going for a perfect run.
-LEVEL_REQUIRED_CHALLENGES = {
-    level: [c for c in challenges if not c.endswith("_BONUS")]
-    for level, challenges in LEVEL_CHALLENGES.items()
-}
-
-CHALLENGE_POINTS = {
-    "L1_OUTLIER": 25,
-    "L1_CENTER": 25,
-    "L1_BONUS": 25,
-    "L2_CONSISTENCY": 30,
-    "L2_SD": 30,
-    "L2_BONUS": 30,
-    "L3_Q1": 20,
-    "L3_Q2": 20,
-    "L3_Q3": 20,
-    "L3_Q4": 20,
-    "L3_BONUS": 20,
-    "L4_POISSON": 35,
-    "L4_EXP": 35,
-    "L4_BONUS": 35,
-    "L5_STABILITY": 45,
-    "L5_PURPOSE": 45,
-    "L5_BONUS": 45,
-}
-
-CHALLENGE_NAMES = {
-    "L1_OUTLIER": "Outlier Attack",
-    "L1_CENTER": "Pick the Better Center",
-    "L1_BONUS": "Level 1 Bonus",
-    "L2_CONSISTENCY": "Machine Consistency",
-    "L2_SD": "Variability Lab",
-    "L2_BONUS": "Level 2 Bonus",
-    "L3_Q1": "Junction Track 1",
-    "L3_Q2": "Junction Track 2",
-    "L3_Q3": "Junction Track 3",
-    "L3_Q4": "Junction Track 4",
-    "L3_BONUS": "Bonus Track",
-    "L4_POISSON": "Arrival Count",
-    "L4_EXP": "Waiting Time",
-    "L4_BONUS": "Level 4 Bonus",
-    "L5_STABILITY": "Monte Carlo Stability",
-    "L5_PURPOSE": "Monte Carlo Purpose",
-    "L5_BONUS": "Variance Reduction Bonus",
-}
-
-PAGE_LEVELS = {
-    "🎯 Level 1 — Meanhaven Station": 1,
-    "📏 Level 2 — Spreadmoor Yards": 2,
-    "🎲 Level 3 — Distribution Junction": 3,
-    "✈️ Level 4 — Arrivals Terminal": 4,
-    "🏆 Level 5 — Simulation Lab": 5,
-}
-
-PAGE_OPTIONS = [
-    "🧭 Diagnostic Check-In",
-    "🏠 Home",
-    "🎯 Level 1 — Meanhaven Station",
-    "📏 Level 2 — Spreadmoor Yards",
-    "🎲 Level 3 — Distribution Junction",
-    "✈️ Level 4 — Arrivals Terminal",
-    "🏆 Level 5 — Simulation Lab",
-    "📊 Mastery Check-Out",
-    "🥇 Leaderboard",
-]
-
 # Five questions mirroring the five levels, asked after Level 5 as a check-out.
 # The baseline uses the same keys as a self-assessment, so completion checks and
 # reporting can compare the same topics without treating the baseline as a quiz.
+## Deliberately new scenarios (bakery, delivery routes, a call center, a help
+# desk, a construction project) rather than restatements of the commute/
+# hospital/machine/airport examples used during the levels, so the check-out
+# measures transfer of the concept instead of memory of the training example.
 ASSESSMENT_QUESTIONS = [
-    ("CENTER", "A dataset has one extremely large outlier. Which measure of center is pulled the most by it?",
-     ["Mean", "Median", "Mode"], "Mean"),
-    ("SPREAD", "Which single quantity best measures how spread out a dataset is around its mean?",
-     ["Standard deviation", "Median", "Mode"], "Standard deviation"),
-    ("DISTRIBUTION", "Which distribution models a fixed number of independent success/failure trials?",
-     ["Binomial", "Uniform", "Exponential"], "Binomial"),
-    ("ARRIVAL", "In a Poisson arrival process, which distribution models the time between two consecutive arrivals?",
-     ["Exponential", "Normal", "Binomial"], "Exponential"),
-    ("SIMULATION", "What is the main reason to run a Monte Carlo simulation many times instead of once?",
-     ["To estimate the range and likelihood of outcomes", "To eliminate all randomness", "To guarantee the best-case result"],
-     "To estimate the range and likelihood of outcomes"),
+    ("CENTER", "A small bakery tracks daily sales. One holiday saw sales **ten times higher** than a normal day. Which **center** is most affected by that one unusual day?",
+     ["Mean", "Median", "Mode", "Range"], "Mean"),
+    ("SPREAD", "Two delivery drivers each average **30 minutes** per route. Which statistic tells you whose delivery times are more **consistent**?",
+     ["Standard deviation", "Median", "Mode", "Sample size"], "Standard deviation"),
+    ("DISTRIBUTION", "A call center dials **40 independent customers**; each call either connects or it doesn't. Which distribution models the **number of calls that connect**?",
+     ["Binomial", "Uniform", "Exponential", "Poisson"], "Binomial"),
+    ("ARRIVAL", "A help desk tracks the **time between** one customer call ending and the next one starting. Which distribution models that **waiting time**?",
+     ["Exponential", "Normal", "Binomial", "Uniform"], "Exponential"),
+    ("SIMULATION", "A project manager runs a **random simulation** of a construction project's completion time many times instead of once. Why?",
+     ["To estimate possible outcomes and their chances", "To remove all randomness", "To guarantee the best result", "To avoid using data"],
+     "To estimate possible outcomes and their chances"),
 ]
 
 ASSESSMENT_EXPLANATIONS = {
-    "CENTER": "The mean uses every value, so one extreme value can pull it far away from the typical data point.",
-    "SPREAD": "Standard deviation measures how far values usually are from the mean.",
-    "DISTRIBUTION": "A Binomial distribution counts successes across a fixed number of independent success/failure trials.",
-    "ARRIVAL": "In a Poisson process, the time between events is modeled with an Exponential distribution.",
-    "SIMULATION": "Many Monte Carlo runs show the range of possible outcomes and make estimates more stable.",
+    "CENTER": "The mean uses every value, so one very large value can pull it up.",
+    "SPREAD": "Standard deviation tells how far values usually are from the mean.",
+    "DISTRIBUTION": "Binomial counts successes across a fixed number of yes/no trials.",
+    "ARRIVAL": "Exponential is used for waiting time between events.",
+    "SIMULATION": "Many runs show what could happen and make the estimate steadier.",
 }
 
 SELF_ASSESSMENT_SCALE = [
@@ -740,11 +510,11 @@ SELF_ASSESSMENT_VALUES = {
 }
 
 SELF_ASSESSMENT_ITEMS = [
-    ("CENTER", "Choosing the best measure of center when data has outliers"),
-    ("SPREAD", "Interpreting standard deviation as spread around the mean"),
-    ("DISTRIBUTION", "Matching common distributions to modeling situations"),
-    ("ARRIVAL", "Connecting Poisson event counts with Exponential waiting times"),
-    ("SIMULATION", "Explaining why repeated Monte Carlo runs are useful"),
+    ("CENTER", "Choosing mean, median, or mode when data has outliers"),
+    ("SPREAD", "Using standard deviation to describe spread"),
+    ("DISTRIBUTION", "Matching distributions to real situations"),
+    ("ARRIVAL", "Using Poisson counts and Exponential wait times"),
+    ("SIMULATION", "Explaining why many Monte Carlo runs help"),
 ]
 
 # -----------------------------
@@ -752,23 +522,25 @@ SELF_ASSESSMENT_ITEMS = [
 # -----------------------------
 STORY = {
     "intro": (
-        "**Mission:** fix five statistics problems and unlock the final simulation challenge.\n\n"
-        "Start with a short confidence check-in. Then work through center, spread, distributions, "
-        "arrival models, and Monte Carlo simulation. The final check-out lets you see what changed. "
-        "Check-ins do not affect XP."
+        "**Welcome to StatsQuest.** This is a short game about statistics for modeling and simulation.\n\n"
+        "**Your mission:** help a simulation team make decisions from data. You will practice center, "
+        "spread, distributions, arrivals, and Monte Carlo simulation.\n\n"
+        "Start with a quick confidence check-in. Then play each level, earn XP, and unlock the next step. "
+        "The final check-out shows what changed. Check-ins do not affect XP."
     ),
     "pre_assessment": (
-        "Rate where you are starting on five statistics ideas. This is a self-assessment, not a quiz."
+        "Rate your confidence on five topics. This is not a quiz. It gives you a starting point to compare with the end."
     ),
     "post_assessment": (
-        "Answer five check-out questions to see what you can do after the game."
+        "Answer five check-out questions, then rate your confidence again on the same five "
+        "topics from the start. That's what shows how much changed for you."
     ),
     "levels": {
-        1: "Outliers can pull the mean. Compare mean, median, and mode before choosing a center.",
-        2: "Two datasets can share the same mean but have very different spread.",
-        3: "Match each modeling situation to the distribution that fits it.",
-        4: "Use Poisson for event counts and Exponential for time between events.",
-        5: "Run repeated simulations to estimate possible outcomes and uncertainty.",
+        1: "Outliers can change the mean. Compare mean, median, and mode.",
+        2: "Two datasets can have the same mean but different spread.",
+        3: "Match each situation to the right distribution.",
+        4: "Use Poisson for counts and Exponential for wait times.",
+        5: "Run many simulations to see possible outcomes.",
     },
     "epilogue": (
         "Finished. You completed the statistics path and the final simulation challenge."
@@ -777,56 +549,248 @@ STORY = {
 
 YOUTUBE_RESOURCES = {
     "home": [
-        ("Notebook setup and statistics overview", "https://www.youtube.com/watch?v=iPy9Yisdlms"),
+        (
+            "Introduction",
+            "https://youtu.be/O78C5MAVdo4?si=r9XOz_fYZxkNvbs3",
+            "Why statistics helps us model real systems, like airport lines and product defects.",
+        ),
     ],
     "level_1": [
-        ("Commute-time dataset", "https://www.youtube.com/watch?v=5gxzPkAQdIg"),
-        ("Mean, median, and mode", "https://www.youtube.com/watch?v=KthQkeHZMLg"),
+        (
+            "Mean, median, and mode",
+            "https://www.youtube.com/watch?v=5gxzPkAQdIg",
+            "Shows how to find the center of data and why median can help with outliers.",
+        ),
     ],
     "level_2": [
-        ("Normal distribution and spread", "https://www.youtube.com/watch?v=A89FpnWX0rY"),
+        (
+            "Range, variance, and standard deviation",
+            "https://www.youtube.com/watch?v=A89FpnWX0rY",
+            "Explains range, variance, standard deviation, and why spread matters.",
+        ),
     ],
     "level_3": [
-        ("Normal distribution", "https://www.youtube.com/watch?v=A89FpnWX0rY"),
-        ("Uniform distribution", "https://www.youtube.com/watch?v=2nS3ltVimyU"),
-        ("Binomial distribution", "https://www.youtube.com/watch?v=kI3gy6Efcew"),
+        (
+            "From data to distributions and Normal",
+            "https://www.youtube.com/watch?v=A89FpnWX0rY",
+            "Shows how data shapes become distributions, including the Normal curve.",
+        ),
+        (
+            "Uniform distribution",
+            "https://www.youtube.com/watch?v=2nS3ltVimyU",
+            "Covers situations where every value in a range is equally likely.",
+        ),
+        (
+            "Bernoulli and Binomial distributions",
+            "https://www.youtube.com/watch?v=kI3gy6Efcew",
+            "Connects one yes/no trial to counting successes across many trials.",
+        ),
+        (
+            "Poisson distribution",
+            "https://www.youtube.com/watch?v=EXoLpIwM_Qc",
+            "Models event counts in a fixed time, like arrivals per 10 minutes.",
+        ),
     ],
     "level_4": [
-        ("Poisson distribution", "https://www.youtube.com/watch?v=EXoLpIwM_Qc"),
-        ("Poisson and Exponential connection", "https://www.youtube.com/watch?v=BELZStrWy2g"),
+        (
+            "Simulation realism",
+            "https://www.youtube.com/watch?v=BELZStrWy2g",
+            "Shows why random inputs make simulations more realistic.",
+        ),
     ],
     "level_5": [
-        ("Monte Carlo simulation", "https://www.youtube.com/watch?v=Q9Gy7mkk-2A"),
+        (
+            "Monte Carlo idea",
+            "https://www.youtube.com/watch?v=Q9Gy7mkk-2A",
+            "Shows why we run simulations many times.",
+        ),
     ],
 }
+
+STORY = content_get("story", STORY)
+if isinstance(STORY.get("levels"), dict):
+    STORY["levels"] = {
+        int(level): text
+        for level, text in STORY["levels"].items()
+        if str(level).isdigit()
+    }
+
+video_content = content_get("videos", None)
+if isinstance(video_content, dict):
+    YOUTUBE_RESOURCES = {
+        section: [
+            (
+                item.get("title", ""),
+                item.get("url", ""),
+                item.get("description", ""),
+            )
+            for item in resources
+        ]
+        for section, resources in video_content.items()
+    }
 
 def show_youtube_resources(section_key):
     resources = YOUTUBE_RESOURCES.get(section_key, [])
     if not resources:
         return
-    st.subheader("📺 Notebook YouTube resources")
-    for title, url in resources:
+    st.subheader("📺 Review before you play")
+    for title, url, description in resources:
         st.markdown(f"**{title}**")
+        st.caption(description)
         st.video(url)
+
+def show_formula_reference():
+    formula_text = content_get(
+        "formulas.home",
+        r"""
+Formula quick reference
+
+**Mean:** add all values, then divide by how many values there are.  
+Formula: $\bar{x} = \frac{\sum x_i}{n}$
+
+**Median:** sort the values, then take the middle value.
+
+**Mode:** find the value that appears most often.
+
+**Range:** subtract the smallest value from the largest value.  
+Formula: $\text{Range} = \max - \min$
+
+**Variance:** measures spread using squared distances from the mean.  
+Formula: $s^2 = \frac{\sum (x_i - \bar{x})^2}{n - 1}$
+
+**Standard deviation:** take the square root of variance.  
+Formula: $s = \sqrt{s^2}$
+"""
+    )
+    title, body = split_markdown_title(formula_text, "Formula quick reference")
+    st.subheader(title)
+    st.markdown(body)
+
+def show_level_1_formulas():
+    formula_text = content_get(
+        "formulas.level_1",
+        r"""
+Level 1 formulas
+
+**Mean:** add all values, then divide by the number of values.  
+Formula: $\bar{x} = \frac{\sum x_i}{n}$
+
+**Median:** sort the values, then take the middle value.
+
+**Mode:** find the value that appears most often.
+
+**Range:** subtract the smallest value from the largest value.  
+Formula: $\text{Range} = \max - \min$
+"""
+    )
+    title, body = split_markdown_title(formula_text, "Level 1 formulas")
+    st.subheader(title)
+    st.markdown(body)
+
+def show_level_2_formulas():
+    formula_text = content_get(
+        "formulas.level_2",
+        r"""
+Level 2 formulas
+
+**Range:** subtract the smallest value from the largest value.  
+Formula: $\text{Range} = \max - \min$
+
+**Variance:** measures spread using squared distances from the mean.  
+Formula: $s^2 = \frac{\sum (x_i - \bar{x})^2}{n - 1}$
+
+**Standard deviation:** take the square root of variance.  
+Formula: $s = \sqrt{s^2}$
+"""
+    )
+    title, body = split_markdown_title(formula_text, "Level 2 formulas")
+    st.subheader(title)
+    st.markdown(body)
+
+def show_distribution_reference():
+    st.subheader("Distribution quick reference")
+    distribution_df = pd.DataFrame(
+        [
+            ("Normal", "Values cluster around an average", "sensor noise", "Mean, standard deviation"),
+            ("Uniform", "All values in a range are equally likely", "random position from 0 to 100", "Minimum, maximum"),
+            ("Bernoulli", "One yes/no or success/failure trial", "one item defective or not defective", "Success probability p"),
+            ("Binomial", "Number of successes in fixed trials", "defects in a batch of 20", "Trials n, probability p"),
+            ("Poisson", "Number of events in a fixed time", "passengers in 10 minutes", "Average rate"),
+            ("Exponential", "Time between events", "time until next passenger", "Rate, mean wait"),
+        ],
+        columns=["Distribution", "Use when", "Example", "Key parameter"],
+    )
+    st.dataframe(distribution_df, hide_index=True, width="stretch")
+
+def show_descriptive_stats(data, *, label_prefix=""):
+    values = np.array(data)
+    modes = pd.Series(values).mode().tolist()
+    labels = [
+        ("Mean", f"{values.mean():.2f}"),
+        ("Median", f"{np.median(values):.2f}"),
+        ("Mode", ", ".join(str(int(mode)) for mode in modes)),
+        ("Range", f"{values.max() - values.min():.2f}"),
+        ("Variance", f"{values.var(ddof=1):.2f}"),
+        ("Std. deviation", f"{values.std(ddof=1):.2f}"),
+    ]
+    for row_start in range(0, len(labels), 3):
+        columns = st.columns(3)
+        for column, (name, value) in zip(columns, labels[row_start:row_start + 3]):
+            column.metric(f"{label_prefix}{name}", value)
+
+def show_how_to_play():
+    st.subheader("How to play")
+    st.info(
+        "Start with the Diagnostic Check-In. Then finish each level in order. "
+        "You get two scoring tries for each required question. First try earns full XP. "
+        "Second try earns partial XP. After two wrong tries, keep trying until it is correct so the next page opens. "
+        "Bonus questions are optional make-up XP."
+    )
+
+def show_scaffold_note(level):
+    note = content_get(f"self_regulation.scaffold_fading.level_{level}", "")
+    if note:
+        st.caption(f"Scaffold level: {note}")
+
+def personal_goal_required():
+    goal_setting = content_get("self_regulation.goal_setting", {})
+    goal_options = goal_setting.get("options", []) if isinstance(goal_setting, dict) else []
+    return bool(goal_options)
+
+def personal_goal_complete():
+    if not personal_goal_required():
+        return True
+    goal = st.session_state.get("learning_goal_choice") or st.session_state.get("learning_goal")
+    if goal:
+        return True
+    pid = st.session_state.get("pid")
+    if not pid:
+        return False
+    return not challenge_history(pid, "SRL_GOAL").empty
 
 def go_to_next_page():
     current = st.session_state.get("selected_page", PAGE_OPTIONS[0])
-    current_index = PAGE_OPTIONS.index(current) if current in PAGE_OPTIONS else 0
-    if current_index >= len(PAGE_OPTIONS) - 1:
+    next_page = navigation.next_page(current)
+    if next_page is None:
         return
-    next_page = PAGE_OPTIONS[current_index + 1]
-    if current == "🧭 Diagnostic Check-In" and not assessment_complete(st.session_state.pid, "pre"):
+    if current == "🏠 Home" and not personal_goal_complete():
+        set_answer_feedback("warning", "Choose a personal goal before moving to the Diagnostic Check-In.")
+        return
+    if current == "🧭 Diagnostic Check-In" and not self_assessment_complete(st.session_state.pid, "pre"):
         set_answer_feedback("warning", "Complete all 5 baseline self-ratings before heading out.")
         return
     if current == "📊 Mastery Check-Out" and not assessment_complete(st.session_state.pid, "post"):
         set_answer_feedback("warning", "Answer all 5 check-out questions before moving on.")
+        return
+    if current == "📊 Mastery Check-Out" and not self_assessment_complete(st.session_state.pid, "post"):
+        set_answer_feedback("warning", "Rate your confidence again before moving on — that's what shows your progress.")
         return
     current_level = PAGE_LEVELS.get(current)
     if current_level and not level_complete(st.session_state.pid, current_level):
         answered, total, pending = level_progress(st.session_state.pid, current_level)
         set_answer_feedback(
             "warning",
-            f"Complete this level before moving on. Correct answers: {answered}/{total}. Pending: {challenge_labels(pending)}.",
+            f"Complete this level before moving on. Required steps complete: {answered}/{total}. Pending: {challenge_labels(pending)}.",
         )
         return
     if not page_accessible(st.session_state.pid, next_page):
@@ -837,17 +801,32 @@ def go_to_next_page():
     st.session_state.answer_feedback = None
     st.session_state.selected_page = next_page
 
+def go_to_previous_page():
+    current = st.session_state.get("selected_page", PAGE_OPTIONS[0])
+    previous = navigation.previous_page(current)
+    if previous is None:
+        return
+    st.session_state.answer_feedback = None
+    st.session_state.selected_page = previous
+
 def show_next_button():
     current = st.session_state.get("selected_page", PAGE_OPTIONS[0])
-    current_index = PAGE_OPTIONS.index(current) if current in PAGE_OPTIONS else 0
-    if current_index >= len(PAGE_OPTIONS) - 1:
+    previous_page = navigation.previous_page(current)
+    next_page = navigation.next_page(current)
+    # Shown here, right above Back/Next, rather than at the top of the page:
+    # this feedback exists because of something the student did with these
+    # buttons (or a redirect while trying to navigate), so it belongs where
+    # their attention already is instead of requiring a scroll to the top.
+    show_answer_feedback()
+    if previous_page is None and next_page is None:
         return
-    next_page = PAGE_OPTIONS[current_index + 1]
     st.divider()
-    st.button(f"Next: {next_page}", type="primary", on_click=go_to_next_page)
-
-def boss_defeated_percent(xp):
-    return min(100, round((xp / PERFECT_SCORE) * 100, 1))
+    back_col, next_col = st.columns(2)
+    if previous_page:
+        back_col.button(f"Back: {previous_page}", on_click=go_to_previous_page, width="stretch")
+    if next_page:
+        next_label = f"Start the game: {next_page}" if next_page.startswith("🎯 Level 1") else f"Next: {next_page}"
+        next_col.button(next_label, type="primary", on_click=go_to_next_page, width="stretch")
 
 def show_boss_progress(xp):
     defeated = boss_defeated_percent(xp)
@@ -855,7 +834,7 @@ def show_boss_progress(xp):
     if xp >= PERFECT_SCORE:
         st.success(f"👑 Perfect score: {xp}/{PERFECT_SCORE} XP. All challenges complete.")
     else:
-        st.info(f"Progress: {defeated}% ({xp}/{PERFECT_SCORE} XP). A perfect score completes the path.")
+        st.info(f"Progress: {defeated}% ({xp}/{PERFECT_SCORE} XP). Get all XP for a perfect score.")
 
 def correct_challenges(pid):
     history = participant_stats(pid)
@@ -924,12 +903,6 @@ def bonus_unlocked(pid, level):
         return True
     return not challenge_history(pid, bonus_id).empty
 
-def challenge_label(challenge: str) -> str:
-    return CHALLENGE_NAMES.get(challenge, challenge)
-
-def challenge_labels(challenges) -> str:
-    return ", ".join(challenge_label(challenge) for challenge in challenges)
-
 def level_complete(pid, level):
     answered, total, _ = level_progress(pid, level)
     return answered == total
@@ -941,20 +914,23 @@ def first_incomplete_level(pid):
     return None
 
 def first_incomplete_page(pid):
-    if not assessment_complete(pid, "pre"):
-        return "🧭 Diagnostic Check-In"
+    if not self_assessment_complete(pid, "pre"):
+        return "🧭 Diagnostic Check-In" if personal_goal_complete() else "🏠 Home"
     level = first_incomplete_level(pid)
     if level is None:
-        return "📊 Mastery Check-Out" if not assessment_complete(pid, "post") else "🥇 Leaderboard"
+        checkout_done = assessment_complete(pid, "post") and self_assessment_complete(pid, "post")
+        return "📊 Mastery Check-Out" if not checkout_done else "🥇 Leaderboard"
     for page, page_level in PAGE_LEVELS.items():
         if page_level == level:
             return page
     return "🏠 Home"
 
 def page_accessible(pid, page):
-    if page == "🧭 Diagnostic Check-In":
+    if page == "🏠 Home":
         return True
-    if not assessment_complete(pid, "pre"):
+    if page == "🧭 Diagnostic Check-In":
+        return personal_goal_complete()
+    if not self_assessment_complete(pid, "pre"):
         return False  # the baseline check-in comes before everything else
     level = PAGE_LEVELS.get(page)
     if level is not None:
@@ -962,8 +938,12 @@ def page_accessible(pid, page):
     if page == "📊 Mastery Check-Out":
         return level_complete(pid, 5)
     if page == "🥇 Leaderboard":
-        return first_incomplete_level(pid) is None and assessment_complete(pid, "post")
-    return page == "🏠 Home"
+        return (
+            first_incomplete_level(pid) is None
+            and assessment_complete(pid, "post")
+            and self_assessment_complete(pid, "post")
+        )
+    return False
 
 def enforce_page_access(pid):
     """Must be called before the `selected_page`-keyed radio widget is
@@ -984,32 +964,35 @@ def show_level_progress(pid, level):
     pending = [challenge for challenge in required if challenge not in correct]
     answered = len(answered_items)
     total = len(required)
-    st.progress(answered / total, text=f"Correct answers: {answered}/{total}")
-    if answered_items:
-        st.caption(f"Answered correctly: {challenge_labels(answered_items)}")
-    if pending:
-        st.caption(f"Pending: {challenge_labels(pending)}")
-    else:
-        st.success("Level complete. You can move to the next page.")
-
-    bonus_id = level_bonus_challenge(level)
-    if bonus_id:
-        missed_xp = level_missed_required_xp(pid, level)
-        bonus_remaining = level_bonus_remaining_xp(pid, level)
-        if missed_xp > 0:
-            st.caption(f"Missed XP from required questions: {missed_xp}. Make-up XP still available here: {bonus_remaining}.")
-        if bonus_id in correct:
-            st.caption(f"🎁 Bonus complete: {challenge_label(bonus_id)} (+XP earned)")
-        elif bonus_unlocked(pid, level):
-            st.caption(f"🎁 Bonus unlocked: {challenge_label(bonus_id)} — a chance to earn back up to {bonus_remaining} XP.")
+    progress_col, _ = st.columns([1, 2])
+    with progress_col:
+        st.progress(answered / total, text=f"Required steps complete: {answered}/{total}")
+        if answered_items:
+            st.caption(f"Completed: {challenge_labels(answered_items)}")
+        if pending:
+            st.caption(f"Pending: {challenge_labels(pending)}")
         else:
-            st.caption(f"🎁 Bonus challenge locked — it unlocks if you miss a question above.")
+            st.success("Level complete. You can move to the next page.")
 
-def set_answer_feedback(kind, message, balloons=False):
+        bonus_id = level_bonus_challenge(level)
+        if bonus_id:
+            missed_xp = level_missed_required_xp(pid, level)
+            bonus_remaining = level_bonus_remaining_xp(pid, level)
+            if missed_xp > 0:
+                st.caption(f"Missed XP from required questions: {missed_xp}. Make-up XP still available here: {bonus_remaining}.")
+            if bonus_id in correct:
+                st.caption(f"🎁 Bonus complete: {challenge_label(bonus_id)} (+XP earned)")
+            elif bonus_unlocked(pid, level):
+                st.caption(f"🎁 Bonus unlocked: {challenge_label(bonus_id)} — a chance to earn back up to {bonus_remaining} XP.")
+            else:
+                st.caption(f"🎁 Bonus challenge locked — it unlocks if you miss a question above.")
+
+def set_answer_feedback(kind, message, balloons=False, challenge=None):
     st.session_state.answer_feedback = {
         "kind": kind,
         "message": message,
         "page": st.session_state.get("selected_page"),
+        "challenge": challenge,
     }
     st.session_state.show_balloons = balloons
 
@@ -1019,6 +1002,8 @@ def show_answer_feedback():
         return
     if feedback.get("page") != st.session_state.get("selected_page"):
         st.session_state.answer_feedback = None
+        return
+    if feedback.get("challenge"):
         return
     kind = feedback.get("kind")
     message = feedback.get("message", "")
@@ -1034,30 +1019,6 @@ def show_answer_feedback():
         st.balloons()
         st.session_state.show_balloons = False
 
-def badge_for_xp(xp):
-    if xp >= PERFECT_SCORE:
-        return "👑 Simulation Champion"
-    if xp >= 250:
-        return "🥇 Monte Carlo Master"
-    if xp >= 180:
-        return "🥈 Distribution Strategist"
-    if xp >= 110:
-        return "🥉 Variability Scout"
-    if xp >= 50:
-        return "⭐ Stats Explorer"
-    return "🎒 Rookie Modeler"
-
-BADGE_DESCRIPTIONS = [
-    ("🎒 Rookie Modeler", "0-49 XP", "Starting the journey through statistics for modeling and simulation."),
-    ("⭐ Stats Explorer", "50-109 XP", "Understands center and is beginning to reason about variability."),
-    ("🥉 Variability Scout", "110-179 XP", "Can compare spread and recognize how distributions shape simulations."),
-    ("🥈 Distribution Strategist", "180-249 XP", "Can connect probability distributions to modeling situations."),
-    ("🥇 Monte Carlo Master", "250-504 XP", "Can reason through simulation uncertainty and Monte Carlo concepts."),
-    ("👑 Simulation Champion", f"{PERFECT_SCORE} XP", "Perfect cumulative score; all challenges complete."),
-]
-
-CONSOLATION_FRACTION = 0.5  # XP fraction awarded for a correct answer on the final attempt
-
 def shuffled_options(key, options):
     """Stable per-user option order so answers are randomized without rerun jitter."""
     shuffled = list(options)
@@ -1066,9 +1027,62 @@ def shuffled_options(key, options):
     return shuffled
 
 def answer_radio(label, options, key, **kwargs):
+    kwargs.setdefault("index", None)
     return st.radio(label, shuffled_options(key, options), key=key, **kwargs)
 
+def show_optional_hint(challenge, default_text=None):
+    """A student-requested hint, shown only if they open it. Used from Level 3
+    onward, where scaffolding fades from guided (Levels 1-2) to available-on-
+    request (Levels 3-4) to none (Level 5) — see self_regulation.scaffold_fading."""
+    hint = content_get(f"hints.{challenge}", default_text)
+    if not hint:
+        return
+    with st.expander("💡 Need a hint?"):
+        st.markdown(hint)
+
+def inline_status_html(message):
+    safe = html.escape(str(message))
+    safe = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", safe)
+    return safe.replace("\n\n", "<br><br>").replace("\n", "<br>")
+
+def show_challenge_status_box(status, title, message):
+    st.markdown(
+        f"""
+        <div class="challenge-status challenge-status-{status}">
+            <div class="challenge-status-title">{html.escape(title)}</div>
+            <div>{inline_status_html(message)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def show_challenge_acknowledgement(pid, challenge):
+    feedback = st.session_state.get("answer_feedback")
+    if (
+        feedback
+        and feedback.get("page") == st.session_state.get("selected_page")
+        and feedback.get("challenge") == challenge
+    ):
+        kind = feedback.get("kind")
+        message = feedback.get("message", "")
+        if kind == "success":
+            show_challenge_status_box("correct", "Answered correctly", message)
+        elif kind == "warning":
+            history = challenge_history(pid, challenge)
+            wrong_count = len(history[history["correct"] == 0]) if not history.empty else 1
+            status = "two-wrong" if wrong_count >= MAX_WRONG_ATTEMPTS else "one-wrong"
+            title = "Second wrong attempt" if status == "two-wrong" else "One wrong attempt"
+            show_challenge_status_box(status, title, message)
+        elif kind == "error":
+            show_challenge_status_box("two-wrong", "Second wrong attempt", message)
+        else:
+            show_challenge_status_box("info", "Challenge status", message)
+        if st.session_state.get("show_balloons"):
+            st.balloons()
+            st.session_state.show_balloons = False
+        st.session_state.answer_feedback = None
+        return
+
     history = challenge_history(pid, challenge)
     if history.empty:
         return
@@ -1079,49 +1093,67 @@ def show_challenge_acknowledgement(pid, challenge):
         points = int(row["points"])
         answer = row["answer"]
         if points > 0:
-            st.success(f"Answered: {challenge_label(challenge)}. You earned {points} XP. Your answer: {answer}.")
+            show_challenge_status_box(
+                "correct",
+                "Answered correctly",
+                f"{challenge_label(challenge)}. You earned {points} XP. Your answer: {answer}.",
+            )
         else:
-            st.info(f"Answered: {challenge_label(challenge)} is complete. No XP was available on this attempt. Your answer: {answer}.")
+            show_challenge_status_box(
+                "correct",
+                "Answered correctly",
+                f"{challenge_label(challenge)} is complete. No XP was left for this try. Your answer: {answer}.",
+            )
         return
 
     attempts_used = len(history)
     attempts_left = max(0, MAX_WRONG_ATTEMPTS - attempts_used)
     latest_answer = history.iloc[-1]["answer"]
-    if attempts_left > 0:
-        st.warning(
-            f"Attempt recorded for {challenge_label(challenge)}. Last answer: {latest_answer}. "
-            f"{attempts_left} scoring attempt(s) left."
+    if attempts_used >= MAX_WRONG_ATTEMPTS:
+        show_challenge_status_box(
+            "two-wrong",
+            "Second wrong attempt",
+            f"Scoring tries used for {challenge_label(challenge)}. Last answer: {latest_answer}. "
+            "Keep trying to complete the question.",
         )
     else:
-        st.warning(
-            f"Scoring attempts used for {challenge_label(challenge)}. Last answer: {latest_answer}. "
-            "Keep trying to complete the question."
+        show_challenge_status_box(
+            "one-wrong",
+            "One wrong attempt",
+            f"Attempt recorded for {challenge_label(challenge)}. Last answer: {latest_answer}. "
+            f"{attempts_left} scoring try/tries left.",
         )
 
 def format_correct_feedback(message, explanation=None):
     if explanation:
-        return f"{message}\n\n**Why this is correct:** {explanation}"
+        return f"{message}\n\n**Why:** {explanation}"
     return message
 
 def format_wrong_feedback(message, answer, correct_answer=None, explanation=None):
     details = []
     if answer is not None and correct_answer is not None:
-        details.append(f"**Why this is wrong:** You chose **{answer}**, but the best answer is **{correct_answer}**.")
+        details.append(f"You chose **{answer}**. The best answer is **{correct_answer}**.")
     elif answer is not None:
-        details.append(f"**Why this is wrong:** **{answer}** is not the best choice here.")
+        details.append(f"**{answer}** is not the best choice here.")
     if explanation:
-        details.append(f"**Why the correct answer works:** {explanation}")
+        details.append(f"**Why:** {explanation}")
     if details:
         return f"{message}\n\n" + "\n\n".join(details)
     return message
 
 def score_answer(pid, level, challenge, answer, correct, base=20, correct_answer=None, explanation=None):
+    if answer is None or str(answer).strip() == "":
+        message = "Choose an answer before submitting."
+        set_answer_feedback("warning", message, challenge=challenge)
+        show_challenge_status_box("one-wrong", "Answer required", message)
+        return
+
     history = challenge_history(pid, challenge)
 
     if not history.empty and (history["correct"] == 1).any():
         message = "You've already scored this challenge."
-        set_answer_feedback("info", message)
-        st.info(message)
+        set_answer_feedback("info", message, challenge=challenge)
+        show_challenge_status_box("info", "Challenge status", message)
         return
 
     wrong_so_far = len(history)  # every recorded attempt here is a wrong one
@@ -1132,21 +1164,21 @@ def score_answer(pid, level, challenge, answer, correct, base=20, correct_answer
         if is_final_attempt:
             points = max(5, int(base * CONSOLATION_FRACTION))
             recorded = add_attempt(pid, level, challenge, answer, True, points)
-            success_message = format_correct_feedback(f"✅ Correct answer! +{points} XP (partial credit on your last try)", explanation)
+            success_message = format_correct_feedback(f"✅ Correct! +{points} XP (partial credit)", explanation)
         elif attempt_number > MAX_WRONG_ATTEMPTS:
             recorded = add_attempt(pid, level, challenge, answer, True, 0)
-            success_message = format_correct_feedback("✅ Correct answer! No XP because the scoring attempts were already used, but this question is now complete.", explanation)
+            success_message = format_correct_feedback("✅ Correct! No XP was left, but the question is complete.", explanation)
         else:
             recorded = add_attempt(pid, level, challenge, answer, True, base)
-            success_message = format_correct_feedback(f"✅ Correct answer! +{base} XP", explanation)
+            success_message = format_correct_feedback(f"✅ Correct! +{base} XP", explanation)
 
         if recorded:
-            set_answer_feedback("success", success_message, balloons=True)
+            set_answer_feedback("success", success_message, balloons=True, challenge=challenge)
         else:
             # A concurrent submit (e.g. a fast double-click) already scored
             # this challenge first — idx_one_correct_per_challenge rejected
             # this insert, so nothing was double-counted.
-            set_answer_feedback("info", "You've already scored this challenge.")
+            set_answer_feedback("info", "You've already scored this challenge.", challenge=challenge)
         st.rerun()
     else:
         add_attempt(pid, level, challenge, answer, False, 0)
@@ -1154,24 +1186,24 @@ def score_answer(pid, level, challenge, answer, correct, base=20, correct_answer
         if remaining > 0:
             consolation = max(5, int(base * CONSOLATION_FRACTION))
             message = format_wrong_feedback(
-                f"❌ Not quite. {remaining} attempt(s) left "
-                f"— a correct answer next time earns partial credit (+{consolation} XP).",
+                f"❌ Not quite. {remaining} scoring try/tries left. "
+                f"A correct answer next time earns partial credit (+{consolation} XP).",
                 answer,
                 correct_answer,
                 explanation,
             )
-            set_answer_feedback("warning", message)
-            st.warning(message)
+            set_answer_feedback("warning", message, challenge=challenge)
+            show_challenge_status_box("one-wrong", "One wrong attempt", message)
         else:
             reveal = f" The correct answer was **{correct_answer}**." if correct_answer is not None else ""
             message = format_wrong_feedback(
-                f"❌ Not quite. Scoring attempts are used, so this challenge is now worth 0 XP.{reveal} Keep trying until you answer correctly to unlock the next page.",
+                f"❌ Not quite. No scoring tries are left, so this question is now worth 0 XP.{reveal} Keep trying until it is correct.",
                 answer,
                 correct_answer,
                 explanation,
             )
-            set_answer_feedback("error", message)
-            st.error(message)
+            set_answer_feedback("error", message, challenge=challenge)
+            show_challenge_status_box("two-wrong", "Second wrong attempt", message)
 
 # -----------------------------
 # Login
@@ -1182,6 +1214,7 @@ for key, default in {
     "pid": "",
     "first_name": "",
     "last_name": "",
+    "learning_goal": "",
     "answer_feedback": None,
     "show_balloons": False,
     "last_selected_page": "",
@@ -1189,7 +1222,7 @@ for key, default in {
     if key not in st.session_state:
         st.session_state[key] = default
 
-_ensure_schema()
+ensure_schema()
 
 if not st.session_state.logged:
     st.markdown('<div class="game-title">🎮 StatsQuest</div>', unsafe_allow_html=True)
@@ -1201,7 +1234,7 @@ if not st.session_state.logged:
     st.markdown(STORY["intro"])
 
     st.info(
-        "Enter your name and a 4-digit PIN. Use the same name + PIN later to resume."
+        "Enter your name and a 4-digit PIN. Use the same name and PIN later to resume."
     )
 
     c1, c2 = st.columns(2)
@@ -1265,6 +1298,13 @@ if st.session_state.is_admin:
     st.markdown('<div class="game-title">🛠️ StatsQuest Admin Dashboard</div>', unsafe_allow_html=True)
     st.caption("Instructor view — every participant's score and full attempt history.")
 
+    if CONTENT_ISSUES:
+        st.warning(
+            f"⚠️ content.json is missing required section(s): {', '.join(CONTENT_ISSUES)}. "
+            "The app is falling back to built-in defaults for that copy — check that "
+            "content.json exists next to app.py and is valid JSON."
+        )
+
     board = leaderboard()
     st.subheader("🥇 Leaderboard")
     if board.empty:
@@ -1301,7 +1341,12 @@ if st.session_state.is_admin:
         )
 
     st.subheader("📈 Self-assessment and check-out")
-    diag = log[log["challenge"].str.startswith(("PRE_", "POST_"))].copy() if not log.empty else log
+    # "POST_" is the check-out knowledge quiz (right/wrong); "POSTSELF_" is
+    # the check-out confidence re-rating (1-5 scale) -- kept in a separate
+    # challenge-id namespace specifically so this table can show a real
+    # confidence rise instead of conflating a quiz score with a confidence
+    # rating, which look similar but measure different things.
+    diag = log[log["challenge"].str.startswith(("PRE_", "POST_", "POSTSELF_"))].copy() if not log.empty else log
     if diag.empty:
         st.info("No baseline or check-out responses recorded yet.")
     else:
@@ -1310,24 +1355,36 @@ if st.session_state.is_admin:
         baseline_summary = (
             baseline.dropna(subset=["Confidence"])
             .groupby("Name")
-            .agg(
-                **{
-                    "Baseline confidence": ("Confidence", "mean"),
-                    "Baseline topics": ("challenge", "nunique"),
-                }
-            )
+            .agg(**{"Baseline confidence": ("Confidence", "mean")})
         )
+
+        post_confidence = diag[diag["challenge"].str.startswith("POSTSELF_")].copy()
+        post_confidence["Confidence"] = post_confidence["answer"].map(SELF_ASSESSMENT_VALUES)
+        post_confidence_summary = (
+            post_confidence.dropna(subset=["Confidence"])
+            .groupby("Name")
+            .agg(**{"Check-out confidence": ("Confidence", "mean")})
+        )
+
         checkout_summary = (
             diag[(diag["challenge"].str.startswith("POST_")) & (diag["correct"] == 1)]
             .groupby("Name")["challenge"]
             .nunique()
-            .rename("Check-out correct")
+            .rename("Check-out quiz correct")
         )
-        summary = baseline_summary.join(checkout_summary, how="outer").fillna(
-            {"Baseline topics": 0, "Check-out correct": 0}
+
+        summary = (
+            baseline_summary
+            .join(post_confidence_summary, how="outer")
+            .join(checkout_summary, how="outer")
         )
-        if "Baseline confidence" in summary:
-            summary["Baseline confidence"] = summary["Baseline confidence"].round(1)
+        summary["Check-out quiz correct"] = summary.get("Check-out quiz correct", 0)
+        summary["Check-out quiz correct"] = summary["Check-out quiz correct"].fillna(0)
+        if "Baseline confidence" in summary and "Check-out confidence" in summary:
+            summary["Confidence change"] = summary["Check-out confidence"] - summary["Baseline confidence"]
+        for column in ("Baseline confidence", "Check-out confidence", "Confidence change"):
+            if column in summary:
+                summary[column] = summary[column].round(1)
         st.dataframe(summary.reset_index(), hide_index=True, width="stretch")
 
     st.stop()
@@ -1335,14 +1392,22 @@ if st.session_state.is_admin:
 pid = st.session_state.pid
 xp = total_xp(pid)
 badge = badge_for_xp(xp)
+board = leaderboard()
+rank = "—"
+if not board.empty:
+    pid_list = board["PID"].tolist()
+    if pid in pid_list:
+        rank = int(board["Rank"].tolist()[pid_list.index(pid)])
 
 # -----------------------------
 # Sidebar
 # -----------------------------
 with st.sidebar:
     st.markdown(f"## 🙋 {st.session_state.first_name} {st.session_state.last_name}")
-    st.metric("Total XP", f"{xp}/{PERFECT_SCORE}")
-    st.write(badge)
+    st.metric("XP", f"{xp}/{PERFECT_SCORE}")
+    st.metric("Badge", badge.split(" ",1)[0], badge.split(" ",1)[1] if " " in badge else "", delta_color="off")
+    st.metric("Progress", f"{boss_defeated_percent(xp)}%")
+    st.metric("Class Rank", f"#{rank}" if rank != "—" else "—")
 
     enforce_page_access(pid)  # may correct/rerun before the widget below is instantiated
 
@@ -1361,7 +1426,7 @@ with st.sidebar:
 # Header
 # -----------------------------
 if st.session_state.last_selected_page != selected:
-    components.html(
+    st.iframe(
         f"""
         <script>
         const token = {json.dumps(selected)};
@@ -1404,7 +1469,7 @@ if st.session_state.last_selected_page != selected:
         }});
         </script>
         """,
-        height=0,
+        height=1,
     )
     st.session_state.last_selected_page = selected
 
@@ -1420,19 +1485,30 @@ st.markdown(
 st.markdown('<div class="game-title">🎮 StatsQuest: Modeling & Simulation</div>', unsafe_allow_html=True)
 st.caption("Short statistics challenges with XP, progress, and a leaderboard.")
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("XP", f"{xp}/{PERFECT_SCORE}")
-m2.metric("Badge", badge.split(" ",1)[0], badge.split(" ",1)[1] if " " in badge else "", delta_color="off")
-board = leaderboard()
-rank = "—"
-if not board.empty:
-    pid_list = board["PID"].tolist()
-    if pid in pid_list:
-        rank = int(board["Rank"].tolist()[pid_list.index(pid)])
-m3.metric("Progress", f"{boss_defeated_percent(xp)}%")
-m4.metric("Class Rank", f"#{rank}" if rank != "—" else "—")
-
-show_answer_feedback()
+page_ctx = SimpleNamespace(
+    pid=pid,
+    xp=xp,
+    PERFECT_SCORE=PERFECT_SCORE,
+    STORY=STORY,
+    content_get=content_get,
+    show_scaffold_note=show_scaffold_note,
+    show_youtube_resources=show_youtube_resources,
+    show_level_progress=show_level_progress,
+    show_level_1_formulas=show_level_1_formulas,
+    show_level_2_formulas=show_level_2_formulas,
+    show_distribution_reference=show_distribution_reference,
+    show_descriptive_stats=show_descriptive_stats,
+    show_challenge_acknowledgement=show_challenge_acknowledgement,
+    show_challenge_status_box=show_challenge_status_box,
+    show_optional_hint=show_optional_hint,
+    show_boss_progress=show_boss_progress,
+    answer_radio=answer_radio,
+    score_answer=score_answer,
+    record_completion_once=record_completion_once,
+    bonus_unlocked=bonus_unlocked,
+    correct_challenges=correct_challenges,
+    show_next_button=show_next_button,
+)
 
 # -----------------------------
 # Pre-assessment (Diagnostic Check-In)
@@ -1441,18 +1517,17 @@ if selected == "🧭 Diagnostic Check-In":
     st.header("🧭 Diagnostic Check-In")
     st.markdown(STORY["pre_assessment"])
 
-    if assessment_complete(pid, "pre"):
-        avg_confidence, answered_count, total_count = self_assessment_summary(pid)
+    if self_assessment_complete(pid, "pre"):
+        avg_confidence, answered_count, total_count = self_assessment_summary(pid, "pre")
         if avg_confidence is None:
             st.success("Baseline recorded.")
         else:
             st.success(f"Baseline recorded: average confidence {avg_confidence:.1f}/5 across {answered_count}/{total_count} topics.")
         st.caption("This didn't affect your XP — it just gives us something to compare against once you finish.")
-        show_assessment_review(pid, "pre")
+        show_confidence_review(pid, "pre")
     else:
         st.info(
-            "Rate your current confidence before you head out to Meanhaven Station. "
-            "There are no right or wrong answers and this won't affect your XP."
+            "Rate your confidence before Level 1. There are no right or wrong answers. This does not affect XP."
         )
         with st.form("pre_assessment_form"):
             pre_answers = {}
@@ -1464,7 +1539,7 @@ if selected == "🧭 Diagnostic Check-In":
                 st.warning("Rate all 5 topics before submitting.")
             else:
                 for key, _ in SELF_ASSESSMENT_ITEMS:
-                    record_diagnostic_answer(pid, "pre", key, pre_answers[key], False)
+                    record_confidence_rating(pid, "pre", key, pre_answers[key])
                 set_answer_feedback("success", "Self-assessment recorded. You can start Level 1.")
                 st.rerun()
     show_next_button()
@@ -1474,8 +1549,10 @@ if selected == "🧭 Diagnostic Check-In":
 # -----------------------------
 elif selected == "🏠 Home":
     st.header("🗺️ Game Map")
-    st.markdown(STORY["intro"])
     show_youtube_resources("home")
+    st.markdown(STORY["intro"])
+    show_how_to_play()
+    show_formula_reference()
 
     for level, info in LEVELS.items():
         accessible = page_accessible(pid, next(page for page, page_level in PAGE_LEVELS.items() if page_level == level))
@@ -1492,18 +1569,30 @@ elif selected == "🏠 Home":
             f"""
             <div class="level-card">
                 <b>{info['icon']} Level {level}: {info['name']}</b><br>
-                <span class="small-muted">{status} · Correct answers: {answered}/{total} · XP earned here: {earned}</span>
+                <span class="small-muted">{status} · Required steps: {answered}/{total} · XP earned here: {earned}</span>
             </div>
             """,
             unsafe_allow_html=True
         )
 
     st.subheader("Mission")
-    st.write(
-        "Complete the five levels: center, variability, distributions, arrivals, and Monte Carlo simulation."
-    )
-    if assessment_complete(pid, "pre"):
-        avg_confidence, _, _ = self_assessment_summary(pid)
+    st.write(content_get("level_copy.home_mission", "Complete five levels: center, spread, distributions, arrivals, and Monte Carlo simulation."))
+    goal_setting = content_get("self_regulation.goal_setting", {})
+    goal_options = goal_setting.get("options", []) if isinstance(goal_setting, dict) else []
+    if goal_options:
+        st.subheader("Personal Goal")
+        selected_goal = st.radio(
+            goal_setting.get("prompt", "What would you most like to understand by the end?"),
+            goal_options,
+            index=None,
+            key="learning_goal_choice",
+        )
+        if selected_goal:
+            st.session_state.learning_goal = selected_goal
+            record_completion_once(pid, 0, "SRL_GOAL", selected_goal)
+            st.caption(f"Your goal: {selected_goal}")
+    if self_assessment_complete(pid, "pre"):
+        avg_confidence, _, _ = self_assessment_summary(pid, "pre")
         if avg_confidence is None:
             st.caption("📈 Baseline self-assessment recorded.")
         else:
@@ -1520,366 +1609,32 @@ elif selected == "🏠 Home":
 # -----------------------------
 # Level 1
 # -----------------------------
-elif selected == "🎯 Level 1 — Meanhaven Station":
-    st.header("🎯 Level 1 — Meanhaven Station")
-    st.markdown(STORY["levels"][1])
-    show_level_progress(pid, 1)
-    st.write("Dataset from the notebook: student commute times.")
-    show_youtube_resources("level_1")
-
-    data = [10, 15, 15, 20, 25, 30, 60]
-    st.write(data)
-
-    c1,c2,c3 = st.columns(3)
-    c1.metric("Mean", f"{np.mean(data):.2f}")
-    c2.metric("Median", f"{np.median(data):.0f}")
-    modes = pd.Series(data).mode().tolist()
-    c3.metric("Mode", ", ".join(str(int(m)) for m in modes))
-
-    st.subheader("Challenge 1 — Outlier Attack")
-    show_challenge_acknowledgement(pid, "L1_OUTLIER")
-    outlier = st.slider("Replace the final commute time with:", 60, 600, 600, 10)
-    changed = [10,15,15,20,25,30,outlier]
-    a,b = st.columns(2)
-    a.metric("New mean", f"{np.mean(changed):.2f}")
-    b.metric("New median", f"{np.median(changed):.2f}")
-
-    q = answer_radio(
-        "Which statistic is affected more by the extreme outlier?",
-        ["Mean", "Median", "Mode"],
-        key="l1q1"
-    )
-    if st.button("Lock answer", key="l1submit1"):
-        score_answer(
-            pid,1,"L1_OUTLIER",q,q=="Mean",25,
-            correct_answer="Mean",
-            explanation="The mean uses every value in the calculation, so one extreme commute time pulls the average upward much more than it changes the median.",
-        )
-
-    st.subheader("Challenge 2 — Pick the Better Center")
-    show_challenge_acknowledgement(pid, "L1_CENTER")
-    st.write("A hospital reports patient waiting times with a few extremely long delays.")
-    q2 = answer_radio(
-        "Which measure would usually be more resistant to those extreme values?",
-        ["Mean","Median","Range"],
-        key="l1q2"
-    )
-    if st.button("Lock answer", key="l1submit2"):
-        score_answer(
-            pid,1,"L1_CENTER",q2,q2=="Median",25,
-            correct_answer="Median",
-            explanation="The median depends on the middle position after sorting, so a few extremely long waits do not distort it as strongly as they distort the mean.",
-        )
-
-    st.subheader("🎁 Bonus Challenge — Make-Up XP")
-    if bonus_unlocked(pid, 1):
-        st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed above.")
-        show_challenge_acknowledgement(pid, "L1_BONUS")
-        q3 = answer_radio(
-            "A dataset is symmetric (bell-shaped) with no outliers. How do its mean and median compare?",
-            ["They are approximately equal","The mean is always much larger","The median is undefined"],
-            key="l1q3"
-        )
-        if st.button("Lock answer", key="l1submit3"):
-            score_answer(
-                pid,1,"L1_BONUS",q3,q3=="They are approximately equal",25,
-                correct_answer="They are approximately equal",
-                explanation="In a symmetric bell-shaped dataset, values balance around the center, so the mean and median usually land close together.",
-            )
-    else:
-        st.caption("🔒 Unlocks if you miss a question above — it's here to help you make up lost XP.")
-    show_next_button()
+elif selected == PAGE_OPTIONS[2]:
+    render_level_1(page_ctx)
 
 # -----------------------------
 # Level 2
 # -----------------------------
-elif selected == "📏 Level 2 — Spreadmoor Yards":
-    st.header("📏 Level 2 — Spreadmoor Yards")
-    st.markdown(STORY["levels"][2])
-    show_level_progress(pid, 2)
-    show_youtube_resources("level_2")
-    machine_a = np.array([9.9,10.0,10.0,10.0,10.1])
-    machine_b = np.array([6,8,10,12,14])
-
-    df = pd.DataFrame({
-        "Machine":["A","B"],
-        "Mean":[machine_a.mean(),machine_b.mean()],
-        "Sample SD":[machine_a.std(ddof=1),machine_b.std(ddof=1)]
-    })
-    st.dataframe(df, hide_index=True, width="stretch")
-
-    show_challenge_acknowledgement(pid, "L2_CONSISTENCY")
-    q = answer_radio(
-        "Both machines have the same mean. Which machine is more consistent?",
-        ["Machine A","Machine B","They are equally consistent"],
-        key="l2q1"
-    )
-    if st.button("Lock answer", key="l2submit1"):
-        score_answer(
-            pid,2,"L2_CONSISTENCY",q,q=="Machine A",30,
-            correct_answer="Machine A",
-            explanation="Machine A's values stay very close to 10, giving it a much smaller standard deviation and more consistent output.",
-        )
-
-    st.subheader("Variability Lab")
-    show_challenge_acknowledgement(pid, "L2_SD")
-    spread = st.slider("Choose a standard deviation for a normal process", 1, 30, 10)
-    np.random.seed(7)
-    sample = np.random.normal(50, spread, 1200)
-    hist = np.histogram(sample, bins=20)
-    chart = pd.DataFrame({"Frequency": hist[0]}, index=np.round(hist[1][:-1],1))
-    st.bar_chart(chart)
-
-    q2 = answer_radio(
-        "As standard deviation increases, what happens to the distribution?",
-        ["It becomes more spread out","It becomes narrower","The mean must increase"],
-        key="l2q2"
-    )
-    if st.button("Lock answer", key="l2submit2"):
-        score_answer(
-            pid,2,"L2_SD",q2,q2=="It becomes more spread out",30,
-            correct_answer="It becomes more spread out",
-            explanation="Standard deviation measures typical distance from the mean; increasing it spreads observations farther away from the center.",
-        )
-
-    st.subheader("🎁 Bonus Challenge — Make-Up XP")
-    if bonus_unlocked(pid, 2):
-        st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed above.")
-        show_challenge_acknowledgement(pid, "L2_BONUS")
-        q3 = answer_radio(
-            "Which quantity is the square of the standard deviation?",
-            ["Variance","Mean","Median"],
-            key="l2q3"
-        )
-        if st.button("Lock answer", key="l2submit3"):
-            score_answer(
-                pid,2,"L2_BONUS",q3,q3=="Variance",30,
-                correct_answer="Variance",
-                explanation="Variance is standard deviation squared; standard deviation is the square root of variance.",
-            )
-    else:
-        st.caption("🔒 Unlocks if you miss a question above — it's here to help you make up lost XP.")
-    show_next_button()
+elif selected == PAGE_OPTIONS[3]:
+    render_level_2(page_ctx)
 
 # -----------------------------
 # Level 3
 # -----------------------------
-elif selected == "🎲 Level 3 — Distribution Junction":
-    st.header("🎲 Level 3 — Distribution Junction")
-    st.markdown(STORY["levels"][3])
-    show_level_progress(pid, 3)
-    st.write("Route each simulation situation onto the distribution that actually generates it.")
-    show_youtube_resources("level_3")
-
-    questions = [
-        ("L3_Q1","Sensor measurement noise clustered around a target value",
-         ["Normal","Poisson","Bernoulli"],"Normal"),
-        ("L3_Q2","A success/failure event with probability p",
-         ["Uniform","Bernoulli","Exponential"],"Bernoulli"),
-        ("L3_Q3","Number of defective products among 20 independent products",
-         ["Binomial","Normal","Uniform"],"Binomial"),
-        ("L3_Q4","Every value between 0 and 100 is equally likely",
-         ["Poisson","Uniform","Exponential"],"Uniform"),
-    ]
-    distribution_explanations = {
-        "L3_Q1": "Normal distributions model continuous values that cluster around a central target with symmetric variation.",
-        "L3_Q2": "Bernoulli distributions model one yes/no or success/failure trial with probability p.",
-        "L3_Q3": "Binomial distributions count successes across a fixed number of independent Bernoulli trials.",
-        "L3_Q4": "Uniform distributions give every value in the allowed interval the same chance.",
-    }
-
-    for i,(cid,prompt,opts,correct) in enumerate(questions,1):
-        st.markdown(f"**Junction Track {i}:** {prompt}")
-        show_challenge_acknowledgement(pid, cid)
-        ans = answer_radio("Choose:", opts, key=cid)
-        if st.button("Route signal", key=f"{cid}_submit"):
-            score_answer(
-                pid,3,cid,ans,ans==correct,20,
-                correct_answer=correct,
-                explanation=distribution_explanations[cid],
-            )
-
-    st.subheader("🎁 Bonus Track — Make-Up XP")
-    if bonus_unlocked(pid, 3):
-        st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed on a track above.")
-        st.markdown("**Bonus Track:** The time between machine breakdowns is continuous and memoryless.")
-        show_challenge_acknowledgement(pid, "L3_BONUS")
-        ans5 = answer_radio("Choose:", ["Exponential","Binomial","Uniform"], key="L3_BONUS")
-        if st.button("Route signal", key="L3_BONUS_submit"):
-            score_answer(
-                pid,3,"L3_BONUS",ans5,ans5=="Exponential",20,
-                correct_answer="Exponential",
-                explanation="The Exponential distribution is continuous, memoryless, and commonly models time between events.",
-            )
-    else:
-        st.caption("🔒 Unlocks if you miss a track above — it's here to help you make up lost XP.")
-    show_next_button()
+elif selected == PAGE_OPTIONS[4]:
+    render_level_3(page_ctx)
 
 # -----------------------------
 # Level 4
 # -----------------------------
-elif selected == "✈️ Level 4 — Arrivals Terminal":
-    st.header("✈️ Level 4 — Arrivals Terminal")
-    st.markdown(STORY["levels"][4])
-    show_level_progress(pid, 4)
-    st.write(
-        "The notebook connects Poisson event counts with Exponential interarrival times."
-    )
-    show_youtube_resources("level_4")
-
-    rate = st.slider("Average passengers arriving per 10 minutes", 1, 20, 5)
-    np.random.seed(11)
-    counts = np.random.poisson(rate, 1000)
-    values, freq = np.unique(counts, return_counts=True)
-    st.bar_chart(pd.DataFrame({"Frequency":freq}, index=values))
-
-    q1 = answer_radio(
-        "Which distribution models the NUMBER of passengers arriving in a fixed interval?",
-        ["Poisson","Exponential","Normal"],
-        key="l4q1"
-    )
-    show_challenge_acknowledgement(pid, "L4_POISSON")
-    if st.button("Lock count answer", key="l4submit1"):
-        score_answer(
-            pid,4,"L4_POISSON",q1,q1=="Poisson",35,
-            correct_answer="Poisson",
-            explanation="The Poisson distribution models how many events occur in a fixed interval when events happen at an average rate.",
-        )
-
-    mean_wait = 10/rate
-    st.metric("Implied mean interarrival time", f"{mean_wait:.2f} min")
-
-    q2 = answer_radio(
-        "Which distribution can model the TIME until the next passenger arrives?",
-        ["Binomial","Exponential","Uniform"],
-        key="l4q2"
-    )
-    show_challenge_acknowledgement(pid, "L4_EXP")
-    if st.button("Lock waiting-time answer", key="l4submit2"):
-        score_answer(
-            pid,4,"L4_EXP",q2,q2=="Exponential",35,
-            correct_answer="Exponential",
-            explanation="The Exponential distribution models waiting time until the next event in a Poisson arrival process.",
-        )
-
-    st.subheader("🎁 Bonus Challenge — Make-Up XP")
-    if bonus_unlocked(pid, 4):
-        st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed above.")
-        show_challenge_acknowledgement(pid, "L4_BONUS")
-        q3 = answer_radio(
-            "If the average arrival rate doubles, what happens to the expected interarrival time (1/rate)?",
-            ["It is halved","It doubles","It stays the same"],
-            key="l4q3"
-        )
-        if st.button("Lock bonus answer", key="l4submit3"):
-            score_answer(
-                pid,4,"L4_BONUS",q3,q3=="It is halved",35,
-                correct_answer="It is halved",
-                explanation="Expected interarrival time is the reciprocal of the arrival rate, so doubling the rate cuts the expected wait in half.",
-            )
-    else:
-        st.caption("🔒 Unlocks if you miss a question above — it's here to help you make up lost XP.")
-    show_next_button()
+elif selected == PAGE_OPTIONS[5]:
+    render_level_4(page_ctx)
 
 # -----------------------------
 # Level 5
 # -----------------------------
-elif selected == "🏆 Level 5 — Simulation Lab":
-    st.header("🏆 Level 5 — Simulation Lab")
-    st.markdown(STORY["levels"][5])
-    show_level_progress(pid, 5)
-    st.write(
-        "Airport security workload: passenger count is Poisson and each passenger's "
-        "service time is Exponential."
-    )
-    show_youtube_resources("level_5")
-
-    arrivals = st.slider("Average arrivals / 10 min", 2, 20, 8)
-    service = st.slider("Average service time (min)", 0.5, 4.0, 1.5, 0.1)
-    runs = st.select_slider("Monte Carlo runs", options=[10,100,1000,10000], value=1000)
-
-    seed = 42
-    rng = np.random.default_rng(seed)
-    workloads = []
-    for _ in range(runs):
-        n = rng.poisson(arrivals)
-        if n == 0:
-            workloads.append(0.0)
-        else:
-            workloads.append(rng.exponential(service, n).sum())
-    workloads = np.array(workloads)
-
-    a,b,c = st.columns(3)
-    a.metric("Estimated mean", f"{workloads.mean():.2f}")
-    b.metric("Std. deviation", f"{workloads.std(ddof=1):.2f}" if runs > 1 else "—")
-    c.metric("95th percentile", f"{np.percentile(workloads,95):.2f}")
-
-    hist = np.histogram(workloads, bins=min(30,max(5,int(math.sqrt(runs)))))
-    st.bar_chart(pd.DataFrame({"Frequency":hist[0]}, index=np.round(hist[1][:-1],1)))
-
-    q1 = answer_radio(
-        "What usually happens to a Monte Carlo estimate as the number of runs increases?",
-        [
-            "It generally becomes more stable",
-            "It always becomes larger",
-            "It becomes deterministic after 100 runs"
-        ],
-        key="l5q1"
-    )
-    show_challenge_acknowledgement(pid, "L5_STABILITY")
-    if st.button("Submit answer", key="l5submit1"):
-        score_answer(
-            pid,5,"L5_STABILITY",q1,
-            q1=="It generally becomes more stable",45,
-            correct_answer="It generally becomes more stable",
-            explanation="More Monte Carlo runs average out random noise, so the estimate usually changes less from run to run.",
-        )
-
-    q2 = answer_radio(
-        "Why run Monte Carlo repeatedly instead of using only one random simulation?",
-        [
-            "To study the range and likelihood of possible outcomes",
-            "To eliminate all uncertainty",
-            "To guarantee the maximum possible result"
-        ],
-        key="l5q2"
-    )
-    show_challenge_acknowledgement(pid, "L5_PURPOSE")
-    if st.button("Submit final answer", key="l5submit2"):
-        score_answer(
-            pid,5,"L5_PURPOSE",q2,
-            q2=="To study the range and likelihood of possible outcomes",45,
-            correct_answer="To study the range and likelihood of possible outcomes",
-            explanation="Monte Carlo repeats random simulations to estimate possible outcomes, their variation, and how likely they are.",
-        )
-
-    st.subheader("🎁 Bonus Challenge — Make-Up XP")
-    if bonus_unlocked(pid, 5):
-        st.caption("Optional — doesn't block moving on. A chance to earn back the XP you missed above.")
-        show_challenge_acknowledgement(pid, "L5_BONUS")
-        q3 = answer_radio(
-            "What best describes a 'variance reduction' technique in Monte Carlo simulation?",
-            [
-                "A method to get more precise estimates with fewer runs",
-                "A method that guarantees zero error",
-                "A method that removes the need for randomness"
-            ],
-            key="l5q3"
-        )
-        if st.button("Submit bonus answer", key="l5submit3"):
-            score_answer(
-                pid,5,"L5_BONUS",q3,
-                q3=="A method to get more precise estimates with fewer runs",45,
-                correct_answer="A method to get more precise estimates with fewer runs",
-                explanation="Variance reduction techniques reduce simulation noise, giving a more precise estimate for the same number of runs.",
-            )
-    else:
-        st.caption("🔒 Unlocks if you miss a question above — it's here to help you make up lost XP.")
-
-    show_boss_progress(xp)
-    if xp >= PERFECT_SCORE:
-        st.markdown(STORY["epilogue"])
-    show_next_button()
+elif selected == PAGE_OPTIONS[6]:
+    render_level_5(page_ctx)
 
 # -----------------------------
 # Post-assessment (Mastery Check-Out)
@@ -1888,18 +1643,16 @@ elif selected == "📊 Mastery Check-Out":
     st.header("📊 Mastery Check-Out")
     st.markdown(STORY["post_assessment"])
 
-    if assessment_complete(pid, "post"):
+    quiz_done = assessment_complete(pid, "post")
+    confidence_done = self_assessment_complete(pid, "post")
+
+    if quiz_done:
         post_correct, post_total = assessment_score(pid, "post")
-        avg_confidence, _, _ = self_assessment_summary(pid)
-        st.success(f"Check-out recorded: {post_correct}/{post_total} correct.")
-        a, b, c = st.columns(3)
-        a.metric("Baseline confidence", f"{avg_confidence:.1f}/5" if avg_confidence is not None else "Recorded")
-        b.metric("Check-out", f"{post_correct}/{post_total}")
-        c.metric("Topics checked", f"{post_total}")
+        st.success(f"Check-out quiz recorded: {post_correct}/{post_total} correct.")
         show_assessment_review(pid, "post")
     else:
         st.info(
-            "Five ungraded questions. No XP effect."
+            "Five questions. No XP effect."
         )
         with st.form("post_assessment_form"):
             post_answers = {}
@@ -1912,8 +1665,38 @@ elif selected == "📊 Mastery Check-Out":
             else:
                 for key, _, _, correct_answer in ASSESSMENT_QUESTIONS:
                     record_diagnostic_answer(pid, "post", key, post_answers[key], post_answers[key] == correct_answer)
-                set_answer_feedback("success", "Check-out recorded. Here's how far you've come.")
+                set_answer_feedback("success", "Check-out quiz recorded. Now rate your confidence again below.")
                 st.rerun()
+
+    # The confidence re-rating only appears once the quiz is done, and is a
+    # separate step from it -- it's what actually lets us show a rise (or
+    # not) in confidence, which the quiz alone can't answer.
+    if quiz_done:
+        st.divider()
+        if confidence_done:
+            st.subheader("Confidence: before vs. after")
+            show_confidence_change(pid)
+            show_confidence_review(pid, "post")
+        else:
+            st.subheader("Rate your confidence again")
+            st.info(
+                "Same five topics as your baseline check-in. This shows how much changed "
+                "for you — it doesn't affect your XP."
+            )
+            with st.form("post_confidence_form"):
+                post_confidence_answers = {}
+                for key, prompt in SELF_ASSESSMENT_ITEMS:
+                    post_confidence_answers[key] = st.radio(prompt, SELF_ASSESSMENT_SCALE, key=f"postself_{key}", index=None)
+                confidence_submitted = st.form_submit_button("Submit confidence rating", type="primary")
+            if confidence_submitted:
+                if any(value is None for value in post_confidence_answers.values()):
+                    st.warning("Rate all 5 topics before submitting.")
+                else:
+                    for key, _ in SELF_ASSESSMENT_ITEMS:
+                        record_confidence_rating(pid, "post", key, post_confidence_answers[key])
+                    set_answer_feedback("success", "Confidence rating recorded. Here's how far you've come.")
+                    st.rerun()
+
     show_next_button()
 
 # -----------------------------

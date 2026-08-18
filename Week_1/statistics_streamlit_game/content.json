@@ -1,0 +1,142 @@
+{
+  "story": {
+    "intro": "**Welcome to StatsQuest.** This is a short game about statistics for modeling and simulation.\n\n**Your mission:** help a simulation team make decisions from data. You will practice center, spread, distributions, arrivals, and Monte Carlo simulation.\n\nStart with a quick confidence check-in. Then play each level, earn XP, and unlock the next step. The final check-out shows what changed. Check-ins do not affect XP.",
+    "pre_assessment": "Rate your confidence on five topics. This is not a quiz. It gives you a starting point to compare with the end.",
+    "post_assessment": "Answer five check-out questions, then rate your confidence again on the same five topics from the start. That's what shows how much changed for you.",
+    "levels": {
+      "1": "Outliers can change the mean. Compare mean, median, and mode.",
+      "2": "Two datasets can have the same mean but different spread.",
+      "3": "Match each situation to the right distribution.",
+      "4": "Use Poisson for counts and Exponential for wait times.",
+      "5": "Run many simulations to see possible outcomes."
+    },
+    "epilogue": "Finished. You completed the statistics path and the final simulation challenge."
+  },
+  "videos": {
+    "home": [
+      {
+        "title": "Introduction and overview",
+        "url": "https://youtu.be/O78C5MAVdo4?si=XLO54BfPtzihkY8i",
+        "description": "Why statistics helps us model real systems, like airport lines and product defects."
+      }
+    ],
+    "level_1": [
+      {
+        "title": "Mean, median, and mode",
+        "url": "https://youtu.be/FLqp7tUPeEY?si=Vtz0C98GLZUIkWha",
+        "description": "Shows how to find the center of data and why median can help with outliers."
+      }
+    ],
+    "level_2": [
+      {
+        "title": "Range, variance, and standard deviation",
+        "url": "https://youtu.be/LVT9m-HuFT8?si=K4Vu1YuITnJz8zYK",
+        "description": "Explains range, variance, standard deviation, and why spread matters."
+      }
+    ],
+    "level_3": [
+      {
+        "title": "From data to distributions and Normal distribution",
+        "url": "https://youtu.be/hE2Gj3VOAKo?si=WjzQecIrxfALN4VS",
+        "description": "Shows how data shapes become distributions, including the Normal curve."
+      },
+      {
+        "title": "Uniform distribution",
+        "url": "https://youtu.be/dSCVEXQ4xm8?si=Co1x4jvejAxc6svh",
+        "description": "Covers situations where every value in a range is equally likely."
+      },
+      {
+        "title": "Bernoulli and Binomial distributions",
+        "url": "https://youtu.be/caasiP7krKc?si=KTDWSeFOxShfYDn7",
+        "description": "Connects one yes/no trial to counting successes across many trials."
+      },
+      {
+        "title": "Poisson distribution",
+        "url": "https://youtu.be/31bdh5iTu1U?si=33irZx8beLmT1Ulr",
+        "description": "Models event counts in a fixed time, like arrivals per 10 minutes."
+      }
+    ],
+    "level_4": [
+      {
+        "title": "Simulation realism",
+        "url": "https://youtu.be/29mSD1VdDr8?si=JESI8MEEvgapNb4W",
+        "description": "Shows why random inputs make simulations more realistic."
+      }
+    ],
+    "level_5": [
+      {
+        "title": "Monte Carlo idea",
+        "url": "https://youtu.be/owXCsJ21elg?si=HgmFbxb_Dm2Enm4v",
+        "description": "Shows why we run simulations many times."
+      }
+    ]
+  },
+  "formulas": {
+    "home": "Formula quick reference\n\n**Mean:** add all values, then divide by how many values there are.  \nFormula: $\\bar{x} = \\frac{\\sum x_i}{n}$\n\n**Median:** sort the values, then take the middle value.\n\n**Mode:** find the value that appears most often.\n\n**Range:** subtract the smallest value from the largest value.  \nFormula: $\\text{Range} = \\max - \\min$\n\n**Variance:** measures spread using squared distances from the mean.  \nFormula: $s^2 = \\frac{\\sum (x_i - \\bar{x})^2}{n - 1}$\n\n**Standard deviation:** take the square root of variance.  \nFormula: $s = \\sqrt{s^2}$",
+    "level_1": "Level 1 formulas\n\n**Mean:** add all values, then divide by the number of values.  \nFormula: $\\bar{x} = \\frac{\\sum x_i}{n}$\n\n**Median:** sort the values, then take the middle value.\n\n**Mode:** find the value that appears most often.\n\n**Range:** subtract the smallest value from the largest value.  \nFormula: $\\text{Range} = \\max - \\min$",
+    "level_2": "Level 2 formulas\n\n**Range:** subtract the smallest value from the largest value.  \nFormula: $\\text{Range} = \\max - \\min$\n\n**Variance:** measures spread using squared distances from the mean.  \nFormula: $s^2 = \\frac{\\sum (x_i - \\bar{x})^2}{n - 1}$\n\n**Standard deviation:** take the square root of variance.  \nFormula: $s = \\sqrt{s^2}$"
+  },
+  "hints": {
+    "L3_Q1": "Does the value cluster around a center, or is it spread evenly across a range?",
+    "L3_Q2": "This describes exactly one trial with two possible outcomes.",
+    "L3_Q3": "You're counting successes across a fixed number of separate yes/no trials.",
+    "L3_Q4": "No value in the range is any more likely than another.",
+    "L3_BONUS": "This is about the waiting time until the next event, not a count.",
+    "L4_POISSON": "You are counting how many passengers arrive during a fixed 10-minute block.",
+    "L4_EXP": "You are measuring the gap in time before one single passenger shows up next."
+  },
+  "self_regulation": {
+    "goal_setting": {
+      "prompt": "What would you most like to understand by the end?",
+      "options": [
+        "Understand basic statistics",
+        "Choose distributions correctly",
+        "Understand simulation inputs",
+        "Understand Monte Carlo simulation"
+      ]
+    },
+    "scaffold_fading": {
+      "level_1": "Guided practice: predict, experiment, observe, explain, transfer.",
+      "level_2": "Guided practice with less help: inspect the data before seeing the spread statistics.",
+      "level_3": "Challenge first: use hints only when needed.",
+      "level_4": "Independent lab: ask for help only if needed.",
+      "level_5": "Independent analyst challenge: make a simulation decision."
+    }
+  },
+  "level_copy": {
+    "home_mission": "Complete five levels: center, spread, distributions, arrivals, and Monte Carlo simulation.",
+    "level_1_intro": "A team is studying student commute times. Start with the usual pattern, make a prediction, then test what happens when one commute becomes unusually long.",
+    "level_1_prediction": "Prediction: What do you think will happen if we replace 35 with 600?",
+    "level_1_observe": "Did the result match your prediction?",
+    "level_1_outlier_input": "Enter a **very large outlier** to replace the final commute time",
+    "level_1_outlier_caption": "Try values like 90, 200, or 600 and watch the statistics change.",
+    "level_1_q1": "Which **measure of center** changes the most because of the **very large outlier**?",
+    "level_1_q1_explanation": "The mean uses every value, so one very large value pulls it up.",
+    "level_1_transition": "Now transfer the idea to a new setting.",
+    "level_1_hospital_intro": "A hospital usually sees wait times close to 10 minutes.",
+    "level_1_hospital_outlier_input": "Add one **unusually long wait time**",
+    "level_1_hospital_prompt": "One patient waited much longer than usual. The hospital wants one number to describe a typical patient's wait.",
+    "level_1_q2": "Which statistic would you report for the **typical wait**?",
+    "level_1_q2_explanation": "The median stays close to the usual waits because one unusually long wait does not pull it much.",
+    "level_1_reflection": "Complete the sentence: When data contains an extreme outlier, I should check ______ before describing a typical value.",
+    "level_1_bonus_q": "If one value becomes a **very large outlier** and the smallest value stays the same, what happens to the **range**?",
+    "level_1_bonus_explanation": "Range is maximum minus minimum. If the maximum gets larger and the minimum stays the same, the range increases.",
+    "level_2_focus": "Level 2 is about **spread**: how close together or far apart the values are.",
+    "level_2_intro": "Two machines make parts near 10 units. Look at the values first, then decide which machine is more consistent.",
+    "level_2_reveal": "Same center. Different variability.",
+    "level_2_q1": "Both machines have the same **mean**. Which machine is more **consistent**?",
+    "level_2_q1_explanation": "Machine A's values stay closer to 10, so its standard deviation is smaller.",
+    "level_2_prediction": "Prediction before the slider: What do you think increasing standard deviation from 5 to 20 will do?",
+    "level_2_sd_input": "Choose a standard deviation for a process",
+    "level_2_sd_caption": "A larger standard deviation means values are farther from the mean.",
+    "level_2_chart_caption": "A larger standard deviation makes the chart wider.",
+    "level_2_q2": "As **standard deviation** increases, what happens to the **data values** in the chart?",
+    "level_2_q2_explanation": "Standard deviation measures typical distance from the mean.",
+    "level_2_bonus_q": "Which quantity is the square of the **standard deviation**?",
+    "level_2_bonus_explanation": "Variance is standard deviation squared.",
+    "level_4_prediction": "Prediction: If the average arrival rate doubles, what do you think happens to the average wait between passengers?",
+    "level_4_observe": "Did the result match your prediction?",
+    "level_5_prediction": "Prediction: As the number of simulation runs grows from 10 to 10,000, what do you think happens to the histogram of possible workloads?",
+    "level_5_observe": "Did the result match your prediction? Try changing the runs above to compare."
+  }
+}
