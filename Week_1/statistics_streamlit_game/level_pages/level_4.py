@@ -5,10 +5,8 @@ import streamlit as st
 
 def render(ctx):
     pid = ctx.pid
-    st.header("Level 4 - Arrivals Terminal")
-    ctx.show_scaffold_note(4)
+    st.header(ctx.STORY["levels"][4])
     ctx.show_youtube_resources("level_4")
-    st.markdown(ctx.STORY["levels"][4])
     ctx.show_level_progress(pid, 4)
     st.write(
         "An airport wants to model passengers arriving at security. Use Poisson for the number of arrivals "
@@ -18,7 +16,7 @@ def render(ctx):
     prediction = st.radio(
         ctx.content_get(
             "level_copy.level_4_prediction",
-            "Prediction: If the average arrival rate doubles, what happens to the average wait between passengers?",
+            "Before you try it: if the average arrival rate doubles, what do you think happens to the average wait between passengers?",
         ),
         ["It gets longer", "It gets shorter", "It stays the same", "There's no relationship"],
         index=None,
@@ -38,7 +36,7 @@ def render(ctx):
     st.caption("This chart shows passenger counts in 10-minute blocks.")
 
     observed = st.radio(
-        ctx.content_get("level_copy.level_4_observe", "Did the result match your prediction?"),
+        ctx.content_get("level_copy.level_4_observe", "Did that match what you expected?"),
         ["Yes", "No", "I am not sure"],
         index=None,
         key="l4_observe",
@@ -46,8 +44,9 @@ def render(ctx):
     if observed:
         st.caption(f"Observation recorded: {observed}")
 
+    st.subheader("Question 1")
     q1 = ctx.answer_radio(
-        "**Question 1:** Which distribution models the **number of passengers** arriving in a **fixed time**?",
+        "Which distribution models the **number of passengers** arriving in a **fixed time**?",
         ["Poisson", "Exponential", "Normal", "Bernoulli"],
         key="l4q1",
     )
@@ -65,8 +64,9 @@ def render(ctx):
             explanation="Poisson models how many events happen in a fixed time.",
         )
 
+    st.subheader("Question 2")
     q2 = ctx.answer_radio(
-        "**Question 2:** Which distribution models the **time until the next passenger** arrives?",
+        "Which distribution models the **time until the next passenger** arrives?",
         ["Binomial", "Exponential", "Uniform", "Poisson"],
         key="l4q2",
     )
@@ -84,12 +84,12 @@ def render(ctx):
             explanation="Exponential models the wait until the next event.",
         )
 
-    st.subheader("Bonus Question - Make-Up XP")
+    st.subheader("Bonus Question")
     if ctx.bonus_unlocked(pid, 4):
         st.caption("Optional. Use this to earn back missed XP.")
         ctx.show_challenge_acknowledgement(pid, "L4_BONUS")
         q3 = ctx.answer_radio(
-            "**Bonus Question:** If the **average arrival rate doubles**, what happens to the **average wait time**?",
+            "If the **average arrival rate doubles**, what happens to the **average wait time**?",
             ["It is halved", "It doubles", "It stays the same", "It becomes negative"],
             key="l4q3",
         )

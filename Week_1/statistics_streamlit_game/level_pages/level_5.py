@@ -7,10 +7,8 @@ import streamlit as st
 
 def render(ctx):
     pid = ctx.pid
-    st.header("Level 5 - Simulation Lab")
-    ctx.show_scaffold_note(5)
+    st.header(ctx.STORY["levels"][5])
     ctx.show_youtube_resources("level_5")
-    st.markdown(ctx.STORY["levels"][5])
     ctx.show_level_progress(pid, 5)
     st.write("Airport security workload depends on how many passengers arrive and how long each one takes.")
     st.info("A fixed model gives one answer. A random simulation gives many possible answers, so you can see risk.")
@@ -18,7 +16,7 @@ def render(ctx):
     prediction = st.radio(
         ctx.content_get(
             "level_copy.level_5_prediction",
-            "Prediction: As the number of simulation runs grows, what happens to the histogram of possible workloads?",
+            "Before you try it: as the number of simulation runs grows, what do you think happens to the shape of the results?",
         ),
         ["It gets steadier and more stable", "It gets more random each time", "It stays exactly the same shape no matter what", "It stops being useful"],
         index=None,
@@ -53,7 +51,7 @@ def render(ctx):
     st.caption("This chart shows the possible workload totals from many runs.")
 
     observed = st.radio(
-        ctx.content_get("level_copy.level_5_observe", "Did the result match your prediction? Try changing the runs above to compare."),
+        ctx.content_get("level_copy.level_5_observe", "Did that match what you expected? Try changing the number of runs above to compare."),
         ["Yes", "No", "I am not sure"],
         index=None,
         key="l5_observe",
@@ -61,8 +59,9 @@ def render(ctx):
     if observed:
         st.caption(f"Observation recorded: {observed}")
 
+    st.subheader("Question 1")
     q1 = ctx.answer_radio(
-        "**Question 1:** What usually happens to a **Monte Carlo estimate** as the **number of runs** increases?",
+        "What usually happens to a **Monte Carlo estimate** as the **number of runs** increases?",
         [
             "It generally becomes more stable",
             "It always becomes larger",
@@ -84,8 +83,9 @@ def render(ctx):
             explanation="More runs average out random noise.",
         )
 
+    st.subheader("Question 2")
     q2 = ctx.answer_radio(
-        "**Question 2:** Why run **Monte Carlo** many times instead of using **one random simulation**?",
+        "Why run **Monte Carlo** many times instead of using **one random simulation**?",
         [
             "To estimate possible outcomes and their chances",
             "To eliminate all uncertainty",
@@ -107,12 +107,12 @@ def render(ctx):
             explanation="Monte Carlo repeats random simulations to show what could happen.",
         )
 
-    st.subheader("Bonus Question - Make-Up XP")
+    st.subheader("Bonus Question")
     if ctx.bonus_unlocked(pid, 5):
         st.caption("Optional. Use this to earn back missed XP.")
         ctx.show_challenge_acknowledgement(pid, "L5_BONUS")
         q3 = ctx.answer_radio(
-            "**Bonus Question:** Which method can make a **Monte Carlo estimate** more **precise**?",
+            "Which method can make a **Monte Carlo estimate** more **precise**?",
             [
                 "A method to get more precise estimates with fewer runs",
                 "A method that guarantees zero error",

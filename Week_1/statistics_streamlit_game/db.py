@@ -68,7 +68,7 @@ class DBConnection:
     def cursor(self):
         return self._raw.cursor()
 
-    def _read_sql_unlocked(self, query, params=None):
+    def _read_sql_unlocked(self, query, params=None) -> pd.DataFrame:
         if isinstance(self._raw, sqlite3.Connection):
             return pd.read_sql_query(query, self._raw, params=params)
 
@@ -87,7 +87,7 @@ class DBConnection:
         cursor.close()
         return pd.DataFrame(rows, columns=columns)
 
-    def read_sql(self, query, params=None):
+    def read_sql(self, query, params=None) -> pd.DataFrame:
         if self._lock is not None:
             with self._lock:
                 return self._read_sql_unlocked(query, params)
@@ -261,7 +261,7 @@ def add_attempt(pid, level, challenge, answer, correct, points):
     return True
 
 
-def participant_stats(pid):
+def participant_stats(pid) -> pd.DataFrame:
     connection = conn()
     df = connection.read_sql(
         sql("SELECT * FROM challenge_attempts WHERE pid=? ORDER BY id"),
@@ -271,7 +271,7 @@ def participant_stats(pid):
     return df
 
 
-def leaderboard():
+def leaderboard() -> pd.DataFrame:
     connection = conn()
     df = connection.read_sql("""
         SELECT p.pid AS "PID",
@@ -290,13 +290,18 @@ def leaderboard():
     return df
 
 
-def level_score(pid, level):
+def level_score(pid, level) -> int:
     df = participant_stats(pid)
     if df.empty:
         return 0
-    return int(df[df["level"] == level]["points"].sum())
+    matching_rows: pd.DataFrame = df.loc[df["level"] == level]
+    points = pd.Series(matching_rows["points"])
+    return int(points.sum())
 
 
-def total_xp(pid):
+def total_xp(pid) -> int:
     df = participant_stats(pid)
-    return 0 if df.empty else int(df["points"].sum())
+    if df.empty:
+        return 0
+    points = pd.Series(df["points"])
+    return int(points.sum())

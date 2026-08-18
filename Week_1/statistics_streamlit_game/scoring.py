@@ -2,11 +2,11 @@ MAX_WRONG_ATTEMPTS = 2
 CONSOLATION_FRACTION = 0.5
 
 LEVELS = {
-    1: {"name": "Meanhaven Station", "icon": "🎯"},
-    2: {"name": "Spreadmoor Yards", "icon": "📏"},
-    3: {"name": "Distribution Junction", "icon": "🎲"},
-    4: {"name": "Arrivals Terminal", "icon": "✈️"},
-    5: {"name": "Simulation Lab", "icon": "🏆"},
+    1: {"name": "The Unusual Commute", "icon": "🎯"},
+    2: {"name": "Same Average, Different Machines", "icon": "📏"},
+    3: {"name": "Choose the Right Randomness", "icon": "🎲"},
+    4: {"name": "Airport Arrival Lab", "icon": "✈️"},
+    5: {"name": "The Simulation Decision", "icon": "🏆"},
 }
 
 LEVEL_MAX_POINTS = {
@@ -51,29 +51,34 @@ CHALLENGE_POINTS = {
     "L5_BONUS": 45,
 }
 
+# Kept identical to the plain labels shown on each level's own page (just
+# "Question 1", "Prediction", "Bonus Question", ...) rather than separate
+# flavor names -- these strings appear in the progress bar's "Completed" /
+# "Pending" captions, and having them not match what's on the page is
+# itself a source of confusion.
 CHALLENGE_NAMES = {
     "SRL_GOAL": "Personal Goal",
-    "L1_PREDICT": "Outlier Prediction",
-    "L1_OBSERVE": "Outlier Observation",
-    "L1_OUTLIER": "Outlier Attack",
-    "L1_CENTER": "Pick the Better Center",
-    "L1_REFLECT": "Outlier Reflection",
-    "L1_BONUS": "Level 1 Bonus",
-    "L2_CONSISTENCY": "Machine Consistency",
-    "L2_PREDICT_SD": "Spread Prediction",
-    "L2_SD": "Variability Lab",
-    "L2_BONUS": "Level 2 Bonus",
-    "L3_Q1": "Junction Track 1",
-    "L3_Q2": "Junction Track 2",
-    "L3_Q3": "Junction Track 3",
-    "L3_Q4": "Junction Track 4",
-    "L3_BONUS": "Bonus Track",
-    "L4_POISSON": "Arrival Count",
-    "L4_EXP": "Waiting Time",
-    "L4_BONUS": "Level 4 Bonus",
-    "L5_STABILITY": "Monte Carlo Stability",
-    "L5_PURPOSE": "Monte Carlo Purpose",
-    "L5_BONUS": "Variance Reduction Bonus",
+    "L1_PREDICT": "Prediction",
+    "L1_OBSERVE": "Observation",
+    "L1_OUTLIER": "Question 1",
+    "L1_CENTER": "Question 2",
+    "L1_REFLECT": "Reflection",
+    "L1_BONUS": "Bonus Question",
+    "L2_CONSISTENCY": "Question 1",
+    "L2_PREDICT_SD": "Prediction",
+    "L2_SD": "Question 2",
+    "L2_BONUS": "Bonus Question",
+    "L3_Q1": "Question 1",
+    "L3_Q2": "Question 2",
+    "L3_Q3": "Question 3",
+    "L3_Q4": "Question 4",
+    "L3_BONUS": "Bonus Question",
+    "L4_POISSON": "Question 1",
+    "L4_EXP": "Question 2",
+    "L4_BONUS": "Bonus Question",
+    "L5_STABILITY": "Question 1",
+    "L5_PURPOSE": "Question 2",
+    "L5_BONUS": "Bonus Question",
 }
 
 BADGE_DESCRIPTIONS = [

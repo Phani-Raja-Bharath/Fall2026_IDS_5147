@@ -330,7 +330,7 @@ def challenge_history(pid, challenge):
     df = participant_stats(pid)
     if df.empty:
         return df
-    return df[df["challenge"] == challenge]
+    return df.loc[df["challenge"] == challenge]
 
 def record_completion_once(pid, level, challenge, answer):
     if answer is None or str(answer).strip() == "":
@@ -354,7 +354,7 @@ def assessment_challenge_id(phase, key):
     return f"{'PRE' if phase == 'pre' else 'POST'}_{key}"
 
 def confidence_challenge_id(phase, key):
-    """Challenge id for the 1-5 confidence self-rating (SELF_ASSESSMENT_ITEMS).
+    """Challenge id for the 1-5 confidence self-rating (CONFIDENCE_TOPIC_KEYS).
     Kept in its own namespace ("POSTSELF_" rather than "POST_") so the
     post-course confidence re-rating never collides with the post-course
     knowledge quiz -- both reuse the same topic keys (CENTER, SPREAD, ...).
@@ -389,12 +389,12 @@ def assessment_complete(pid, phase):
     return required.issubset(answered)
 
 def self_assessment_complete(pid, phase):
-    """True once the confidence self-rating (SELF_ASSESSMENT_ITEMS) is done for this phase."""
+    """True once the confidence self-rating is done for this phase."""
     history = participant_stats(pid)
     if history.empty:
         return False
     answered = set(history["challenge"].unique())
-    required = {confidence_challenge_id(phase, key) for key, _ in SELF_ASSESSMENT_ITEMS}
+    required = {confidence_challenge_id(phase, key) for key in CONFIDENCE_TOPIC_KEYS}
     return required.issubset(answered)
 
 def assessment_score(pid, phase):
@@ -403,16 +403,16 @@ def assessment_score(pid, phase):
     if history.empty:
         return 0, total
     required = [assessment_challenge_id(phase, key) for key, *_ in ASSESSMENT_QUESTIONS]
-    scored = history[history["challenge"].isin(required) & (history["correct"] == 1)]
+    scored = history.loc[history["challenge"].isin(required) & (history["correct"] == 1)]
     return int(scored["challenge"].nunique()), total
 
 def self_assessment_summary(pid, phase="pre"):
-    total = len(SELF_ASSESSMENT_ITEMS)
+    total = len(CONFIDENCE_TOPIC_KEYS)
     history = participant_stats(pid)
     if history.empty:
         return None, 0, total
-    required = [confidence_challenge_id(phase, key) for key, _ in SELF_ASSESSMENT_ITEMS]
-    rows = history[history["challenge"].isin(required)].copy()
+    required = [confidence_challenge_id(phase, key) for key in CONFIDENCE_TOPIC_KEYS]
+    rows = history.loc[history["challenge"].isin(required)].copy()
     if rows.empty:
         return None, 0, total
     scores = rows["answer"].map(SELF_ASSESSMENT_VALUES).dropna()
@@ -427,9 +427,9 @@ def show_confidence_review(pid, phase):
         return
     label = "Baseline" if phase == "pre" else "Check-out"
     st.subheader(f"{label} self-assessment review")
-    for key, prompt in SELF_ASSESSMENT_ITEMS:
+    for key, prompt in confidence_items(phase):
         challenge = confidence_challenge_id(phase, key)
-        row = history[history["challenge"] == challenge]
+        row = history.loc[history["challenge"] == challenge]
         if row.empty:
             continue
         answer = html.escape(str(row.iloc[-1]["answer"]))
@@ -464,7 +464,7 @@ def show_assessment_review(pid, phase):
     st.subheader(f"{phase_label} review")
     for key, prompt, _, correct_answer in ASSESSMENT_QUESTIONS:
         challenge = assessment_challenge_id(phase, key)
-        row = history[history["challenge"] == challenge]
+        row = history.loc[history["challenge"] == challenge]
         if row.empty:
             continue
         answer = html.escape(str(row.iloc[-1]["answer"]))
@@ -517,26 +517,64 @@ ASSESSMENT_EXPLANATIONS = {
     "SIMULATION": "Many runs show what could happen and make the estimate steadier.",
 }
 
-SELF_ASSESSMENT_SCALE = [
-    "1 - I have not seen this yet",
-    "2 - I recognize the idea, but I need help",
-    "3 - I can try it with examples",
-    "4 - I can explain it and use it",
-    "5 - I could teach someone else",
-]
+# Stable internal keys for the 5 confidence topics -- these become the
+# "CENTER"/"SPREAD"/... suffix in challenge ids like "PRE_CENTER". The
+# *wording* students see for each topic and each scale point comes from
+# content.json's assessment.pre_confidence / assessment.post_confidence
+# (allowing slightly different phrasing before vs. after), matched to these
+# keys purely by position -- content.json never needs to know the keys exist.
+CONFIDENCE_TOPIC_KEYS = ["CENTER", "SPREAD", "DISTRIBUTION", "ARRIVAL", "SIMULATION"]
 
-SELF_ASSESSMENT_VALUES = {
-    option: index
-    for index, option in enumerate(SELF_ASSESSMENT_SCALE, start=1)
+_DEFAULT_CONFIDENCE_SCALE = {
+    "1": "Not comfortable yet",
+    "2": "A little comfortable",
+    "3": "Somewhat comfortable",
+    "4": "Comfortable",
+    "5": "Very comfortable",
+}
+_DEFAULT_CONFIDENCE_ITEMS = [
+    "Finding a useful center for a dataset",
+    "Understanding how spread out data is",
+    "Choosing a probability distribution for a situation",
+    "Understanding random arrivals and waiting times",
+    "Understanding why a simulation is run many times",
+]
+_DEFAULT_CONFIDENCE_PROMPT = {
+    "pre": "How comfortable do you currently feel with each of these?",
+    "post": "How comfortable do you feel with each of these now?",
 }
 
-SELF_ASSESSMENT_ITEMS = [
-    ("CENTER", "Choosing mean, median, or mode when data has outliers"),
-    ("SPREAD", "Using standard deviation to describe spread"),
-    ("DISTRIBUTION", "Matching distributions to real situations"),
-    ("ARRIVAL", "Using Poisson counts and Exponential wait times"),
-    ("SIMULATION", "Explaining why many Monte Carlo runs help"),
-]
+def confidence_block(phase):
+    section = "pre_confidence" if phase == "pre" else "post_confidence"
+    block = content_get(f"assessment.{section}", {})
+    return block if isinstance(block, dict) else {}
+
+def confidence_prompt(phase):
+    return confidence_block(phase).get("prompt") or _DEFAULT_CONFIDENCE_PROMPT[phase]
+
+def confidence_scale_options(phase):
+    scale = confidence_block(phase).get("scale")
+    if not isinstance(scale, dict) or not scale:
+        scale = _DEFAULT_CONFIDENCE_SCALE
+    return [scale.get(str(n), _DEFAULT_CONFIDENCE_SCALE[str(n)]) for n in range(1, 6)]
+
+def confidence_items(phase):
+    items = confidence_block(phase).get("items")
+    if not isinstance(items, list) or len(items) != len(CONFIDENCE_TOPIC_KEYS):
+        items = _DEFAULT_CONFIDENCE_ITEMS
+    return list(zip(CONFIDENCE_TOPIC_KEYS, items))
+
+def confidence_value_lookup() -> dict[str, int]:
+    """Maps every scale label seen across pre/post to its 1-5 score, so
+    self-reported answers can be averaged even if the two phases' wording
+    ever diverges slightly."""
+    values: dict[str, int] = {}
+    for phase in ("pre", "post"):
+        for score, label in enumerate(confidence_scale_options(phase), start=1):
+            values[label] = score
+    return values
+
+SELF_ASSESSMENT_VALUES = confidence_value_lookup()
 
 # -----------------------------
 # Story
@@ -654,7 +692,10 @@ def show_youtube_resources(section_key):
     resources = YOUTUBE_RESOURCES.get(section_key, [])
     if not resources:
         return
-    st.subheader("📺 Review before you play")
+    st.subheader(f"📺 {content_get('home.resources_label', 'Need a quick refresher?')}")
+    resources_description = content_get("home.resources_description", "")
+    if resources_description:
+        st.caption(resources_description)
     for title, url, description in resources:
         st.markdown(f"**{title}**")
         st.caption(description)
@@ -768,13 +809,8 @@ def show_how_to_play():
         "Bonus questions are optional make-up XP."
     )
 
-def show_scaffold_note(level):
-    note = content_get(f"self_regulation.scaffold_fading.level_{level}", "")
-    if note:
-        st.caption(f"Scaffold level: {note}")
-
 def personal_goal_required():
-    goal_setting = content_get("self_regulation.goal_setting", {})
+    goal_setting = content_get("assessment.goal_setting", {})
     goal_options = goal_setting.get("options", []) if isinstance(goal_setting, dict) else []
     return bool(goal_options)
 
@@ -861,7 +897,7 @@ def correct_challenges(pid):
     history = participant_stats(pid)
     if history.empty:
         return set()
-    return set(history[history["correct"] == 1]["challenge"].tolist())
+    return set(history.loc[history["correct"] == 1, "challenge"].tolist())
 
 def level_progress(pid, level):
     """Progress against the level's REQUIRED challenges only — the bonus
@@ -885,8 +921,8 @@ def level_has_wrong_required_attempt(pid, level):
     history = participant_stats(pid)
     if history.empty:
         return False
-    required = set(LEVEL_REQUIRED_CHALLENGES[level])
-    wrong = history[history["challenge"].isin(required) & (history["correct"] == 0)]
+    required = list(LEVEL_REQUIRED_CHALLENGES[level])
+    wrong = history.loc[history["challenge"].isin(required) & (history["correct"] == 0)]
     return not wrong.empty
 
 def challenge_xp_missed(pid, challenge):
@@ -896,7 +932,8 @@ def challenge_xp_missed(pid, challenge):
     history = challenge_history(pid, challenge)
     if history.empty:
         return 0
-    earned = int(history["points"].max())
+    earned_points = pd.Series(history["points"])
+    earned = int(earned_points.max())
     return max(0, base - earned)
 
 def level_missed_required_xp(pid, level):
@@ -910,7 +947,8 @@ def level_bonus_remaining_xp(pid, level):
     bonus_earned = 0
     history = challenge_history(pid, bonus_id)
     if not history.empty:
-        bonus_earned = int(history["points"].max())
+        bonus_points = pd.Series(history["points"])
+        bonus_earned = int(bonus_points.max())
     return max(0, min(level_missed_required_xp(pid, level), bonus_base - bonus_earned))
 
 def bonus_unlocked(pid, level):
@@ -1090,7 +1128,7 @@ def show_challenge_acknowledgement(pid, challenge):
             show_challenge_status_box("correct", "Answered correctly", message)
         elif kind == "warning":
             history = challenge_history(pid, challenge)
-            wrong_count = len(history[history["correct"] == 0]) if not history.empty else 1
+            wrong_count = len(history.loc[history["correct"] == 0]) if not history.empty else 1
             status = "two-wrong" if wrong_count >= MAX_WRONG_ATTEMPTS else "one-wrong"
             title = "Second wrong attempt" if status == "two-wrong" else "One wrong attempt"
             show_challenge_status_box(status, title, message)
@@ -1108,7 +1146,7 @@ def show_challenge_acknowledgement(pid, challenge):
     if history.empty:
         return
 
-    correct_rows = history[history["correct"] == 1]
+    correct_rows = history.loc[history["correct"] == 1]
     if not correct_rows.empty:
         row = correct_rows.iloc[-1]
         points = int(row["points"])
@@ -1263,7 +1301,7 @@ if not st.session_state.logged:
     last = c2.text_input("Last name", placeholder="Smith")
     pin = st.text_input("Choose a 4-digit PIN", placeholder="1234", max_chars=4, type="password")
 
-    if st.button("🚀 Enter StatsQuest", type="primary", width="stretch"):
+    if st.button(f"🚀 {content_get('home.start_button', 'Start StatsQuest')}", type="primary", width="stretch"):
         if not first.strip() or not last.strip():
             st.warning("Enter your first and last name.")
         elif not pin.strip().isdigit() or len(pin.strip()) != 4:
@@ -1367,11 +1405,11 @@ if st.session_state.is_admin:
     # challenge-id namespace specifically so this table can show a real
     # confidence rise instead of conflating a quiz score with a confidence
     # rating, which look similar but measure different things.
-    diag = log[log["challenge"].str.startswith(("PRE_", "POST_", "POSTSELF_"))].copy() if not log.empty else log
+    diag = log.loc[log["challenge"].str.startswith(("PRE_", "POST_", "POSTSELF_"))].copy() if not log.empty else log
     if diag.empty:
         st.info("No baseline or check-out responses recorded yet.")
     else:
-        baseline = diag[diag["challenge"].str.startswith("PRE_")].copy()
+        baseline = diag.loc[diag["challenge"].str.startswith("PRE_")].copy()
         baseline["Confidence"] = baseline["answer"].map(SELF_ASSESSMENT_VALUES)
         baseline_summary = (
             baseline.dropna(subset=["Confidence"])
@@ -1379,7 +1417,7 @@ if st.session_state.is_admin:
             .agg(**{"Baseline confidence": ("Confidence", "mean")})
         )
 
-        post_confidence = diag[diag["challenge"].str.startswith("POSTSELF_")].copy()
+        post_confidence = diag.loc[diag["challenge"].str.startswith("POSTSELF_")].copy()
         post_confidence["Confidence"] = post_confidence["answer"].map(SELF_ASSESSMENT_VALUES)
         post_confidence_summary = (
             post_confidence.dropna(subset=["Confidence"])
@@ -1388,11 +1426,11 @@ if st.session_state.is_admin:
         )
 
         checkout_summary = (
-            diag[(diag["challenge"].str.startswith("POST_")) & (diag["correct"] == 1)]
+            diag.loc[(diag["challenge"].str.startswith("POST_")) & (diag["correct"] == 1)]
             .groupby("Name")["challenge"]
             .nunique()
-            .rename("Check-out quiz correct")
         )
+        checkout_summary.name = "Check-out quiz correct"
 
         summary = (
             baseline_summary
@@ -1512,7 +1550,6 @@ page_ctx = SimpleNamespace(
     PERFECT_SCORE=PERFECT_SCORE,
     STORY=STORY,
     content_get=content_get,
-    show_scaffold_note=show_scaffold_note,
     show_youtube_resources=show_youtube_resources,
     show_level_progress=show_level_progress,
     show_level_1_formulas=show_level_1_formulas,
@@ -1551,15 +1588,16 @@ if selected == "🧭 Diagnostic Check-In":
             "Rate your confidence before Level 1. There are no right or wrong answers. This does not affect XP."
         )
         with st.form("pre_assessment_form"):
+            st.write(f"**{confidence_prompt('pre')}**")
             pre_answers = {}
-            for key, prompt in SELF_ASSESSMENT_ITEMS:
-                pre_answers[key] = st.radio(prompt, SELF_ASSESSMENT_SCALE, key=f"pre_{key}", index=None)
+            for key, prompt in confidence_items("pre"):
+                pre_answers[key] = st.radio(prompt, confidence_scale_options("pre"), key=f"pre_{key}", index=None)
             pre_submitted = st.form_submit_button("Submit self-assessment", type="primary")
         if pre_submitted:
             if any(value is None for value in pre_answers.values()):
                 st.warning("Rate all 5 topics before submitting.")
             else:
-                for key, _ in SELF_ASSESSMENT_ITEMS:
+                for key in CONFIDENCE_TOPIC_KEYS:
                     record_confidence_rating(pid, "pre", key, pre_answers[key])
                 set_answer_feedback("success", "Self-assessment recorded. You can start Level 1.")
                 st.rerun()
@@ -1597,13 +1635,13 @@ elif selected == "🏠 Home":
         )
 
     st.subheader("Mission")
-    st.write(content_get("level_copy.home_mission", "Complete five levels: center, spread, distributions, arrivals, and Monte Carlo simulation."))
-    goal_setting = content_get("self_regulation.goal_setting", {})
+    st.write(content_get("home.mission", "Complete five challenges and help the simulation team understand what the data is telling them."))
+    goal_setting = content_get("assessment.goal_setting", {})
     goal_options = goal_setting.get("options", []) if isinstance(goal_setting, dict) else []
     if goal_options:
-        st.subheader("Personal Goal")
+        st.subheader("Your Goal")
         selected_goal = st.radio(
-            goal_setting.get("prompt", "What would you most like to understand by the end?"),
+            goal_setting.get("prompt", "What would you most like to get better at today?"),
             goal_options,
             index=None,
             key="learning_goal_choice",
@@ -1705,15 +1743,16 @@ elif selected == "📊 Mastery Check-Out":
                 "for you — it doesn't affect your XP."
             )
             with st.form("post_confidence_form"):
+                st.write(f"**{confidence_prompt('post')}**")
                 post_confidence_answers = {}
-                for key, prompt in SELF_ASSESSMENT_ITEMS:
-                    post_confidence_answers[key] = st.radio(prompt, SELF_ASSESSMENT_SCALE, key=f"postself_{key}", index=None)
+                for key, prompt in confidence_items("post"):
+                    post_confidence_answers[key] = st.radio(prompt, confidence_scale_options("post"), key=f"postself_{key}", index=None)
                 confidence_submitted = st.form_submit_button("Submit confidence rating", type="primary")
             if confidence_submitted:
                 if any(value is None for value in post_confidence_answers.values()):
                     st.warning("Rate all 5 topics before submitting.")
                 else:
-                    for key, _ in SELF_ASSESSMENT_ITEMS:
+                    for key in CONFIDENCE_TOPIC_KEYS:
                         record_confidence_rating(pid, "post", key, post_confidence_answers[key])
                     set_answer_feedback("success", "Confidence rating recorded. Here's how far you've come.")
                     st.rerun()

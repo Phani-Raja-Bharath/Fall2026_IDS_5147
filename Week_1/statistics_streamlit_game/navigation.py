@@ -1,19 +1,19 @@
 PAGE_LEVELS = {
-    "🎯 Level 1 — Meanhaven Station": 1,
-    "📏 Level 2 — Spreadmoor Yards": 2,
-    "🎲 Level 3 — Distribution Junction": 3,
-    "✈️ Level 4 — Arrivals Terminal": 4,
-    "🏆 Level 5 — Simulation Lab": 5,
+    "🎯 Level 1 — The Unusual Commute": 1,
+    "📏 Level 2 — Same Average, Different Machines": 2,
+    "🎲 Level 3 — Choose the Right Randomness": 3,
+    "✈️ Level 4 — Airport Arrival Lab": 4,
+    "🏆 Level 5 — The Simulation Decision": 5,
 }
 
 PAGE_OPTIONS = [
     "🏠 Home",
     "🧭 Diagnostic Check-In",
-    "🎯 Level 1 — Meanhaven Station",
-    "📏 Level 2 — Spreadmoor Yards",
-    "🎲 Level 3 — Distribution Junction",
-    "✈️ Level 4 — Arrivals Terminal",
-    "🏆 Level 5 — Simulation Lab",
+    "🎯 Level 1 — The Unusual Commute",
+    "📏 Level 2 — Same Average, Different Machines",
+    "🎲 Level 3 — Choose the Right Randomness",
+    "✈️ Level 4 — Airport Arrival Lab",
+    "🏆 Level 5 — The Simulation Decision",
     "📊 Mastery Check-Out",
     "🥇 Leaderboard",
 ]

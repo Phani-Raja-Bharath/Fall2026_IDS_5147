@@ -3,10 +3,8 @@ import streamlit as st
 
 def render(ctx):
     pid = ctx.pid
-    st.header("Level 3 - Distribution Junction")
-    ctx.show_scaffold_note(3)
+    st.header(ctx.STORY["levels"][3])
     ctx.show_youtube_resources("level_3")
-    st.markdown(ctx.STORY["levels"][3])
     ctx.show_level_progress(pid, 3)
     st.write("Review all six distributions here. Then pick the distribution that matches each situation.")
     ctx.show_distribution_reference()
@@ -31,11 +29,11 @@ def render(ctx):
     }
 
     for index, (cid, prompt, options, correct) in enumerate(questions, 1):
-        st.subheader(f"Question {index} - Junction Track")
-        st.markdown(f"**Question {index}:** {prompt}")
+        st.subheader(f"Question {index}")
+        st.markdown(prompt)
         ctx.show_challenge_acknowledgement(pid, cid)
         ctx.show_optional_hint(cid, hints[cid])
-        answer = ctx.answer_radio(f"**Question {index}:** Choose the **matching distribution**.", options, key=cid)
+        answer = ctx.answer_radio("Choose the **matching distribution**.", options, key=cid)
         if st.button("Submit distribution choice", key=f"{cid}_submit"):
             ctx.score_answer(
                 pid,
@@ -48,14 +46,14 @@ def render(ctx):
                 explanation=explanations[cid],
             )
 
-    st.subheader("Bonus Question - Make-Up XP")
+    st.subheader("Bonus Question")
     if ctx.bonus_unlocked(pid, 3):
         st.caption("Optional. Use this to earn back missed XP.")
-        st.markdown("**Bonus Question:** The time between machine breakdowns is continuous and memoryless.")
+        st.markdown("The time between machine breakdowns is continuous and memoryless.")
         ctx.show_challenge_acknowledgement(pid, "L3_BONUS")
         ctx.show_optional_hint("L3_BONUS", "This is about the waiting time until the next event, not a count.")
         answer = ctx.answer_radio(
-            "**Bonus Question:** Choose the **matching distribution**.",
+            "Choose the **matching distribution**.",
             ["Exponential", "Binomial", "Uniform", "Normal"],
             key="L3_BONUS",
         )
@@ -71,5 +69,5 @@ def render(ctx):
                 explanation="Exponential is often used for time between events.",
             )
     else:
-        st.caption("Unlocks if you miss a track above.")
+        st.caption("Unlocks if you miss a question above.")
     ctx.show_next_button()

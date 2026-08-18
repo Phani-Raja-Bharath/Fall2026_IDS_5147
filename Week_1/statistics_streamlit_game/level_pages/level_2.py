@@ -5,12 +5,10 @@ import streamlit as st
 
 def render(ctx):
     pid = ctx.pid
-    st.header("Level 2 - Spreadmoor Yards")
-    ctx.show_scaffold_note(2)
+    st.header(ctx.STORY["levels"][2])
     ctx.show_youtube_resources("level_2")
-    st.markdown(ctx.STORY["levels"][2])
     ctx.show_level_progress(pid, 2)
-    st.info(ctx.content_get("level_copy.level_2_focus", "Level 2 is about **spread**: how close together or far apart the values are."))
+    st.info(ctx.content_get("level_copy.level_2_focus", "This challenge is about **spread**: how close together or far apart the values are."))
     ctx.show_level_2_formulas()
     st.write(ctx.content_get(
         "level_copy.level_2_intro",
@@ -21,9 +19,10 @@ def render(ctx):
     machine_b = np.array([6, 8, 10, 12, 14])
     st.dataframe(pd.DataFrame({"Machine A": machine_a, "Machine B": machine_b}), hide_index=True, width="stretch")
 
+    st.subheader("Question 1")
     ctx.show_challenge_acknowledgement(pid, "L2_CONSISTENCY")
     q = ctx.answer_radio(
-        f"**Question 1:** {ctx.content_get('level_copy.level_2_q1', 'Both machines have the same **mean**. Which machine is more **consistent**?')}",
+        ctx.content_get("level_copy.level_2_q1", "Both machines have the same **mean**. Which machine is more **consistent**?"),
         ["Machine A", "Machine B", "They are equally consistent", "There is not enough information"],
         key="l2q1",
     )
@@ -48,10 +47,10 @@ def render(ctx):
             st.dataframe(df, hide_index=True, width="stretch")
             st.info(ctx.content_get("level_copy.level_2_reveal", "Same center. Different variability."))
 
-    st.subheader("Question 2 - Variability Lab")
+    st.subheader("Question 2")
     ctx.show_challenge_acknowledgement(pid, "L2_SD")
     sd_prediction = st.radio(
-        ctx.content_get("level_copy.level_2_prediction", "Prediction before the slider: What do you think increasing standard deviation from 5 to 20 will do?"),
+        ctx.content_get("level_copy.level_2_prediction", "Before you move the slider: what do you think increasing standard deviation from 5 to 20 will do?"),
         ["Make data narrower", "Make data wider", "Move the mean", "No effect"],
         index=None,
         key="l2_sd_prediction",
@@ -70,7 +69,7 @@ def render(ctx):
     st.caption(ctx.content_get("level_copy.level_2_chart_caption", "A larger standard deviation makes the chart wider."))
 
     q2 = ctx.answer_radio(
-        f"**Question 2:** {ctx.content_get('level_copy.level_2_q2', 'As **standard deviation** increases, what happens to the **data values** in the chart?')}",
+        ctx.content_get("level_copy.level_2_q2", "As **standard deviation** increases, what happens to the **data values** in the chart?"),
         ["They become more spread out", "They become narrower", "The mean must increase", "The sample size becomes zero"],
         key="l2q2",
     )
@@ -89,12 +88,12 @@ def render(ctx):
                 explanation=ctx.content_get("level_copy.level_2_q2_explanation", "Standard deviation measures typical distance from the mean."),
             )
 
-    st.subheader("Bonus Question - Make-Up XP")
+    st.subheader("Bonus Question")
     if ctx.bonus_unlocked(pid, 2):
         st.caption("Optional. Use this to earn back missed XP.")
         ctx.show_challenge_acknowledgement(pid, "L2_BONUS")
         q3 = ctx.answer_radio(
-            f"**Bonus Question:** {ctx.content_get('level_copy.level_2_bonus_q', 'Which quantity is the square of the **standard deviation**?')}",
+            ctx.content_get("level_copy.level_2_bonus_q", "Which quantity is the square of the **standard deviation**?"),
             ["Variance", "Mean", "Median", "Range"],
             key="l2q3",
         )

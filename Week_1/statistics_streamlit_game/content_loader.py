@@ -2,7 +2,7 @@ import json
 from typing import Any
 
 
-REQUIRED_CONTENT_KEYS = ("story", "videos", "formulas", "level_copy")
+REQUIRED_CONTENT_KEYS = ("story", "home", "assessment", "videos", "formulas", "level_copy")
 
 
 def load_content(path: str) -> dict[str, Any]:
@@ -29,6 +29,7 @@ def get_content(content: dict[str, Any], path: str, default: Any = "") -> Any:
 
 def split_markdown_title(markdown_text: str, default_title: str) -> tuple[str, str]:
     title, separator, body = str(markdown_text).partition("\n\n")
+    title = title.lstrip("#").strip()  # "### Heading" -> "Heading" for st.subheader()
     if not separator:
         return default_title, str(markdown_text)
     return title or default_title, body

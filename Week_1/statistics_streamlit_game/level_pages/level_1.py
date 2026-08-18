@@ -4,23 +4,21 @@ import streamlit as st
 
 def render(ctx):
     pid = ctx.pid
-    st.header("Level 1 - Meanhaven Station")
-    ctx.show_scaffold_note(1)
+    st.header(ctx.STORY["levels"][1])
     ctx.show_youtube_resources("level_1")
-    st.markdown(ctx.STORY["levels"][1])
     ctx.show_level_progress(pid, 1)
     ctx.show_level_1_formulas()
     st.write(ctx.content_get(
         "level_copy.level_1_intro",
-        "A team is studying student commute times. Start with the usual pattern, make a prediction, "
-        "then test what happens when one commute becomes unusually long.",
+        "A team is studying student commute times. Look at the usual pattern below, then think about "
+        "what might happen if one commute took a lot longer than normal.",
     ))
 
     data = [10, 15, 15, 20, 25, 30, 35]
     st.write(data)
     ctx.show_descriptive_stats(data)
     prediction = st.radio(
-        ctx.content_get("level_copy.level_1_prediction", "Prediction: What do you think will happen if we replace 35 with 600?"),
+        ctx.content_get("level_copy.level_1_prediction", "Before you try it: what do you think will happen if we replace 35 with 600?"),
         ["Mean changes most", "Median changes most", "Mode changes most", "They change equally"],
         index=None,
         key="l1_prediction",
@@ -29,7 +27,7 @@ def render(ctx):
         ctx.record_completion_once(pid, 1, "L1_PREDICT", prediction)
         st.caption(f"Prediction recorded: {prediction}")
 
-    st.subheader("Question 1 - Outlier Attack")
+    st.subheader("Question 1")
     ctx.show_challenge_acknowledgement(pid, "L1_OUTLIER")
     outlier = st.number_input(
         ctx.content_get("level_copy.level_1_outlier_input", "Enter a **very large outlier** to replace the final commute time"),
@@ -43,7 +41,7 @@ def render(ctx):
     changed = [10, 15, 15, 20, 25, 30, outlier]
     ctx.show_descriptive_stats(changed, label_prefix="New ")
     observed = st.radio(
-        ctx.content_get("level_copy.level_1_observe", "Did the result match your prediction?"),
+        ctx.content_get("level_copy.level_1_observe", "Did that match what you expected?"),
         ["Yes", "No", "I am not sure"],
         index=None,
         key="l1_observe",
@@ -53,7 +51,7 @@ def render(ctx):
         st.caption(f"Observation recorded: {observed}")
 
     q = ctx.answer_radio(
-        f"**Question 1:** {ctx.content_get('level_copy.level_1_q1', 'Which **measure of center** changes the most because of the **very large outlier**?')}",
+        ctx.content_get("level_copy.level_1_q1", "Which **measure of center** changes the most because of the **very large outlier**?"),
         ["Mean", "Median", "Mode", "They all change equally"],
         key="l1q1",
     )
@@ -76,9 +74,9 @@ def render(ctx):
                 explanation=ctx.content_get("level_copy.level_1_q1_explanation", "The mean uses every value, so one very large value pulls it up."),
             )
 
-    st.markdown(ctx.content_get("level_copy.level_1_transition", "Now transfer the idea to a new setting."))
+    st.markdown(ctx.content_get("level_copy.level_1_transition", "Let's see if the same idea holds somewhere else."))
 
-    st.subheader("Question 2 - Pick the Better Center")
+    st.subheader("Question 2")
     ctx.show_challenge_acknowledgement(pid, "L1_CENTER")
     hospital_base_waits = [8, 10, 11, 12, 13, 14]
     st.write(ctx.content_get("level_copy.level_1_hospital_intro", "A hospital usually sees wait times close to 10 minutes."))
@@ -108,7 +106,7 @@ def render(ctx):
         "One patient waited much longer than usual. The hospital wants one number to describe a typical patient's wait.",
     ))
     q2 = ctx.answer_radio(
-        f"**Question 2:** {ctx.content_get('level_copy.level_1_q2', 'Which statistic would you report for the **typical wait**?')}",
+        ctx.content_get("level_copy.level_1_q2", "Which statistic would you report for the **typical wait**?"),
         ["Mean", "Median", "Mode", "Range"],
         key="l1q2",
     )
@@ -126,7 +124,7 @@ def render(ctx):
     reflection = st.radio(
         ctx.content_get(
             "level_copy.level_1_reflection",
-            "Complete the sentence: When data contains an extreme outlier, I should check ______ before describing a typical value.",
+            "Finish this thought: when data has an extreme outlier, I should check ______ before describing a typical value.",
         ),
         ["mean and median", "only the largest value", "only the sample size", "only the mode"],
         index=None,
@@ -135,12 +133,12 @@ def render(ctx):
     if reflection:
         ctx.record_completion_once(pid, 1, "L1_REFLECT", reflection)
 
-    st.subheader("Bonus Question - Make-Up XP")
+    st.subheader("Bonus Question")
     if ctx.bonus_unlocked(pid, 1):
         st.caption("Optional. Use this to earn back missed XP.")
         ctx.show_challenge_acknowledgement(pid, "L1_BONUS")
         q3 = ctx.answer_radio(
-            f"**Bonus Question:** {ctx.content_get('level_copy.level_1_bonus_q', 'If one value becomes a **very large outlier** and the smallest value stays the same, what happens to the **range**?')}",
+            ctx.content_get("level_copy.level_1_bonus_q", "If one value becomes a **very large outlier** and the smallest value stays the same, what happens to the **range**?"),
             ["The range increases", "The range decreases", "The range stays the same", "The range becomes the median"],
             key="l1q3",
         )
