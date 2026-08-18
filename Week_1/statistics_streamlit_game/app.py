@@ -12,6 +12,8 @@ import pandas as pd
 import streamlit as st
 
 from content_loader import get_content, load_content, missing_required_keys, split_markdown_title
+import db  # module reference (not `from db import USE_POSTGRES`) so it reflects
+           # the value *after* configure_database() runs, not the import-time default
 from db import (
     add_attempt,
     configure_database,
@@ -92,6 +94,25 @@ ADMIN_PASSWORD = get_secret("STATSQUEST_ADMIN_PASSWORD")
 # would otherwise be sitting in this public source file.
 ADMIN_ACCESS_ENABLED = bool(ADMIN_PASSWORD)
 configure_database(DB, DATABASE_URL)
+
+def show_database_error(detail: str = "") -> None:
+    """A clear, actionable message instead of a raw crash when a database
+    operation fails -- most commonly because a deployment is silently
+    running on local file storage (no DATABASE_URL secret configured) on a
+    host whose filesystem doesn't support that, e.g. Streamlit Community
+    Cloud mounting the app read-only from its git checkout."""
+    st.error(
+        "⚠️ **This app can't reach its database right now.**\n\n"
+        "If you're a student: this isn't something you did wrong — please tell your instructor.\n\n"
+        "If you're the instructor: this deployment is most likely missing its `DATABASE_URL` "
+        "secret (Neon Postgres). Local file storage does not persist reliably on most hosting "
+        "platforms, including Streamlit Community Cloud. Add `DATABASE_URL` under this app's "
+        "**Settings → Secrets**, then reload."
+    )
+    if detail:
+        with st.expander("Technical details"):
+            st.code(detail)
+    st.stop()
 
 st.set_page_config(
     page_title="StatsQuest: Modeling & Simulation",
@@ -1281,7 +1302,10 @@ for key, default in {
     if key not in st.session_state:
         st.session_state[key] = default
 
-ensure_schema()
+try:
+    ensure_schema()
+except Exception as schema_error:
+    show_database_error(str(schema_error))
 
 if not st.session_state.logged:
     st.markdown('<div class="game-title">🎮 StatsQuest</div>', unsafe_allow_html=True)
@@ -1307,22 +1331,31 @@ if not st.session_state.logged:
         elif not pin.strip().isdigit() or len(pin.strip()) != 4:
             st.warning("Your PIN must be exactly 4 digits.")
         else:
-            candidate_pid = make_pid(first, last, pin.strip())
-            existing_pid = find_participant_pid_by_name(first, last)
-            if existing_pid and existing_pid != candidate_pid:
-                st.error(
-                    "That name is already registered with a different PIN. "
-                    "Enter the PIN you used the first time to resume your progress "
-                    "(if you're a different person with the same name, add a middle "
-                    "initial or ask your instructor for help)."
-                )
-            else:
-                new_pid, fn, ln = register_participant(first, last, pin.strip())
-                st.session_state.pid = new_pid
-                st.session_state.first_name = fn
-                st.session_state.last_name = ln
-                st.session_state.selected_page = first_incomplete_page(new_pid)
-                st.session_state.logged = True
+            registered = False
+            try:
+                candidate_pid = make_pid(first, last, pin.strip())
+                existing_pid = find_participant_pid_by_name(first, last)
+                if existing_pid and existing_pid != candidate_pid:
+                    st.error(
+                        "That name is already registered with a different PIN. "
+                        "Enter the PIN you used the first time to resume your progress "
+                        "(if you're a different person with the same name, add a middle "
+                        "initial or ask your instructor for help)."
+                    )
+                else:
+                    new_pid, fn, ln = register_participant(first, last, pin.strip())
+                    st.session_state.pid = new_pid
+                    st.session_state.first_name = fn
+                    st.session_state.last_name = ln
+                    st.session_state.selected_page = first_incomplete_page(new_pid)
+                    st.session_state.logged = True
+                    registered = True
+            except Exception as registration_error:
+                # show_database_error() calls st.stop() itself; kept out of
+                # the st.rerun() path below so a successful rerun is never
+                # accidentally caught by this except clause.
+                show_database_error(str(registration_error))
+            if registered:
                 st.rerun()
 
     with st.expander("🛠️ Instructor / Admin access"):
@@ -1362,6 +1395,16 @@ if st.session_state.is_admin:
             f"⚠️ content.json is missing required section(s): {', '.join(CONTENT_ISSUES)}. "
             "The app is falling back to built-in defaults for that copy — check that "
             "content.json exists next to app.py and is valid JSON."
+        )
+
+    if not db.USE_POSTGRES:
+        st.warning(
+            "⚠️ No `DATABASE_URL` secret is configured, so this app is using local file "
+            "storage (`stats_game.db`) instead of Postgres. That does not persist reliably "
+            "on most hosting platforms, including Streamlit Community Cloud — scores can be "
+            "lost on restart, or writes can fail outright. If this app is deployed anywhere "
+            "other than your own machine, add `DATABASE_URL` under **Settings → Secrets** "
+            "before sharing it with students."
         )
 
     board = leaderboard()
