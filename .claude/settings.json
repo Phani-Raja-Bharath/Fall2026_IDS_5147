@@ -5,7 +5,19 @@
       "Bash(git checkout *)",
       "Bash(python3 -c ' *)",
       "Bash(py -3 -c ' *)",
-      "Bash(py -3 -m py_compile app.py)"
+      "Bash(py -3 -m py_compile app.py)",
+      "Bash(python -m pyright Week_1/statistics_streamlit_game/app.py)",
+      "Bash(pip install *)",
+      "Bash(rm -f /c/Users/phani/AppData/Local/Temp/at_test*.py)",
+      "Bash(rm -rf __pycache__ level_pages/__pycache__)",
+      "Bash(git add *)",
+      "Bash(python -m pyright Week_1/statistics_streamlit_game/app.py Week_1/statistics_streamlit_game/level_pages/level_1.py Week_1/statistics_streamlit_game/level_pages/level_2.py)",
+      "Bash(timeout 90 python -u /c/Users/phani/AppData/Local/Temp/at_final.py)",
+      "Bash(rm -f /c/Users/phani/AppData/Local/Temp/at_final.py)",
+      "Bash(timeout 90 python -u /c/Users/phani/AppData/Local/Temp/at_feedback_test.py)",
+      "Bash(timeout 90 python -u /c/Users/phani/AppData/Local/Temp/at_leak_test.py)",
+      "Bash(where psql *)",
+      "Bash(git diff *)"
     ]
   }
 }
