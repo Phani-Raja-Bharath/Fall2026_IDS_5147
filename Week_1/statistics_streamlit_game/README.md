@@ -1,51 +1,62 @@
 # StatsQuest — Streamlit Statistics Game
 
-This application converts the uploaded **Statistics for Modeling & Simulation**
-notebook into an individual, self-paced Streamlit self-assessment.
+An individual, self-paced Streamlit game for **Statistics for Modeling & Simulation**. Students
+set a personal goal, rate their confidence, play five levels with predict → experiment →
+observe → explain scaffolding that fades as they progress, then check out with a knowledge quiz
+and a second confidence rating — so both the student and the instructor can see what actually
+changed.
 
 ## Game structure
 
-1. **Center Stage**
-   - Mean, median, mode
-   - Effect of outliers
+1. **🎯 Meanhaven Station** — mean, median, mode; predicting and observing the effect of an
+   outlier; transferring the idea to a new scenario.
+2. **📏 Spreadmoor Yards** — range, variance, standard deviation; two datasets with the same mean
+   but different spread.
+3. **🎲 Distribution Junction** — matching Normal, Uniform, Bernoulli, and Binomial to real
+   scenarios, with optional on-request hints.
+4. **✈️ Arrivals Terminal** — Poisson for counts, Exponential for wait times.
+5. **🏆 Simulation Lab** — Monte Carlo simulation of airport security workload; how estimates
+   stabilize as the number of runs increases.
 
-2. **Spread Detective**
-   - Range / variability
-   - Standard deviation
-   - Same mean, different spread
-
-3. **Distribution Dungeon**
-   - Normal
-   - Uniform
-   - Bernoulli
-   - Binomial
-
-4. **Arrival Arena**
-   - Poisson counts
-   - Exponential interarrival times
-
-5. **Monte Carlo Boss**
-   - Airport security workload
-   - Repeated simulation
-   - Stability with increasing runs
+Scaffolding fades level by level: Level 1 is fully guided (prediction + observation required
+before answering), Level 3 offers hints only on request, Level 5 is independent — see
+`content.json`'s `self_regulation.scaffold_fading` for the exact wording shown to students.
 
 ## Gaming features
 
 - Individual login (first name + last name + a self-chosen 4-digit PIN)
-- XP scoring
-- Level unlocking
-- Badges
-- Progression map
-- Leaderboard
-- Instant feedback
-- Balloons for correct answers
-- Final Monte Carlo boss level
-- SQLite persistence
-- Two attempts per challenge: a wrong first try gets one retry; a correct second try earns
-  half-credit XP; a second wrong try reveals the correct answer and locks the challenge at 0 XP
+- Personal learning goal, set before the diagnostic check-in
+- Pre-course confidence self-rating (5 topics, 1–5 scale) and a matching post-course
+  re-rating, so the check-out shows an actual **confidence change** (not just a quiz score)
+- XP scoring, level unlocking, badges, progression map, leaderboard, instant feedback
+- Two attempts per required question: a wrong first try gets one retry; a correct second try
+  earns half-credit XP; a second wrong try reveals the correct answer and locks the challenge
+  at 0 XP (the student keeps answering until correct so the next page opens)
 - One bonus "make-up XP" challenge per level, worth the same XP as a regular challenge in that
-  level, so a participant who lost XP to a retry has a way to earn it back before the next level unlocks
-- Password-protected Admin Dashboard: full leaderboard, full attempt log, CSV export
+  level, so a participant who lost XP to a retry can earn it back before the next level unlocks
+- Post-course quiz uses different scenarios than the training levels (transfer, not recall)
+- SQLite locally, Postgres (Neon) in production — same code path either way
+- Password-protected Admin Dashboard: full leaderboard, full attempt log, confidence-change
+  summary, all with CSV export
+
+## Project structure
+
+```
+app.py                 Entry point: session/login, sidebar, navigation, admin dashboard,
+                        Home / Diagnostic Check-In / Mastery Check-Out pages
+content_loader.py       Loads and looks up content.json
+db.py                   SQLite/Postgres connection handling and all queries
+navigation.py           Page order and page-name constants
+scoring.py              XP, badges, challenge tables
+level_pages/level_N.py  One module per level's page content
+content.json            All student-facing copy: story text, level prompts, formulas,
+                        video links, hints, and the self-regulation/goal-setting text —
+                        edit this to change wording without touching app.py
+```
+
+Every string pulled from `content.json` has a matching fallback baked into the Python code, so a
+missing or invalid `content.json` degrades gracefully instead of breaking the app (the Admin
+Dashboard shows a warning if that happens).
 
 ## Run
 
@@ -69,8 +80,8 @@ participants who happen to share a name don't collide into the same record, and 
 can casually view or answer for someone else.
 
 There is no way to recover a forgotten PIN short of looking it up in the Admin Dashboard's
-attempt log (matched by name) or clearing that person's rows from `stats_game.db` directly —
-tell participants to remember their PIN.
+attempt log (matched by name) or clearing that person's rows from the database directly — tell
+participants to remember their PIN.
 
 ## Admin Dashboard — checking scores
 
@@ -78,8 +89,12 @@ On the login screen, expand **"🛠️ Instructor / Admin access"** and enter th
 reach the dashboard directly (no participant login needed). It shows:
 - The full leaderboard (every participant, rank, XP, correct count, attempts) with CSV export
 - The full attempt log (every answer, correct/incorrect, points, timestamp) with CSV export
+- A confidence summary: baseline confidence, check-out confidence, the change between them, and
+  check-out quiz score, per participant
 
-**Set the admin password** before running a session — it defaults to `changeme123` otherwise:
+**The admin password must be set as a secret — there is no built-in default.** Without it, the
+"Instructor / Admin access" panel shows a notice that admin access is disabled instead of
+falling back to a guessable password:
 
 ```bash
 # macOS/Linux
@@ -93,8 +108,15 @@ $env:STATSQUEST_ADMIN_PASSWORD = "your-password-here"
 streamlit run app.py
 ```
 
-Scores persist in `stats_game.db` for as long as that file exists, so you can reopen the Admin
-Dashboard at any time after the session — even after restarting the app — to review results.
+Or set it in `.streamlit/secrets.toml` (see below) — that's the usual way for a persistent local
+setup or a Streamlit Cloud deployment. **Never put the real password in this README, in
+`content.json`, or anywhere else that gets committed to git** — it only belongs in
+`.streamlit/secrets.toml` (git-ignored) or your deployment platform's secrets manager. If you
+need a private, non-committed place to jot down the actual password and access steps for
+yourself, see "Keeping your own private notes" below.
+
+Scores persist in the database for as long as it exists, so you can reopen the Admin Dashboard
+at any time after the session — even after restarting the app — to review results.
 
 ## Deploying with Neon Postgres
 
@@ -117,6 +139,15 @@ and paste your real Neon connection string there. The real secrets file is ignor
 Keep using `DATABASE_URL` or `NEON_DATABASE_URL` for the database connection; `NEON_API_KEY`
 is included only as a safe placeholder if you need to store that key locally later.
 
+## Keeping your own private notes
+
+If you want a personal cheat-sheet with the real admin password, database access steps, and
+similar operational details, keep it in a file that is **not committed to git** — name it
+something like `ADMIN_ACCESS.local.md` in this folder. This repo's `.gitignore` already excludes
+that exact filename so it's safe to create locally without risking an accidental commit; check
+`git status` before committing regardless, since a rename or a different filename won't be
+covered by that rule.
+
 ## Classroom suggestion
 
 Give participants 20–30 minutes to work individually.
@@ -124,6 +155,9 @@ Give participants 20–30 minutes to work individually.
 Suggested format:
 - Project the leaderboard periodically (names only; no answer details are shown there)
 - Debrief as a class by asking a few participants to explain an answer they had to retry
+- Compare the class's average confidence change in the Admin Dashboard against how the quiz
+  scores actually landed — a topic with a big confidence rise but a low quiz score is worth
+  revisiting
 
-The database is created automatically as `stats_game.db`.
-Delete this file before a new session if you want a clean leaderboard.
+The database is created automatically. Clear participant rows before a new session if you want
+a clean leaderboard (see the Admin Dashboard or connect to the database directly).

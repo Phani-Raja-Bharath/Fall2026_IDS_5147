@@ -1,4 +1,5 @@
-﻿import json
+﻿import hmac
+import json
 import os
 import random
 import re
@@ -57,6 +58,24 @@ CONTENT_ISSUES = missing_required_keys(CONTENT)
 def content_get(path: str, default: Any = "") -> Any:
     return get_content(CONTENT, path, default)
 
+_CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+
+def csv_safe_export(df, columns):
+    """Return a copy of df with the given columns neutralized against CSV/
+    spreadsheet formula injection (a cell like "=cmd|'/c calc'!A1" executing
+    when the exported file is later opened in Excel/Sheets). Student-supplied
+    text (names, free-text answers) flows into these exports untouched
+    otherwise, so a leading =/+/-/@/tab/CR gets a defusing leading quote.
+    Only affects the downloaded file -- the on-screen table is unchanged."""
+    safe = df.copy()
+    for column in columns:
+        if column not in safe:
+            continue
+        safe[column] = safe[column].map(
+            lambda value: f"'{value}" if str(value).startswith(_CSV_FORMULA_TRIGGERS) else value
+        )
+    return safe
+
 def get_secret(name):
     value = os.environ.get(name)
     if value:
@@ -67,9 +86,11 @@ def get_secret(name):
         return None
 
 DATABASE_URL = get_secret("DATABASE_URL") or get_secret("NEON_DATABASE_URL")
-_ADMIN_PASSWORD_SECRET = get_secret("STATSQUEST_ADMIN_PASSWORD")
-ADMIN_PASSWORD = _ADMIN_PASSWORD_SECRET or "changeme123"
-ADMIN_PASSWORD_IS_DEFAULT = not _ADMIN_PASSWORD_SECRET
+ADMIN_PASSWORD = get_secret("STATSQUEST_ADMIN_PASSWORD")
+# No hardcoded fallback password: if the secret isn't set, admin access is
+# disabled outright rather than falling back to a guessable default that
+# would otherwise be sitting in this public source file.
+ADMIN_ACCESS_ENABLED = bool(ADMIN_PASSWORD)
 configure_database(DB, DATABASE_URL)
 
 st.set_page_config(
@@ -411,11 +432,11 @@ def show_confidence_review(pid, phase):
         row = history[history["challenge"] == challenge]
         if row.empty:
             continue
-        answer = str(row.iloc[-1]["answer"])
+        answer = html.escape(str(row.iloc[-1]["answer"]))
         st.markdown(
             f"""
             <div class="level-card">
-                <b>{prompt}</b><br>
+                <b>{html.escape(prompt)}</b><br>
                 <span>{answer}</span>
             </div>
             """,
@@ -446,19 +467,19 @@ def show_assessment_review(pid, phase):
         row = history[history["challenge"] == challenge]
         if row.empty:
             continue
-        answer = str(row.iloc[-1]["answer"])
+        answer = html.escape(str(row.iloc[-1]["answer"]))
         is_correct = bool(row.iloc[-1]["correct"])
         status = "Correct" if is_correct else "Not quite"
         if is_correct:
             result = f"**{status}.** You chose **{answer}**."
         else:
-            result = f"**{status}.** You chose **{answer}**; the best answer is **{correct_answer}**."
+            result = f"**{status}.** You chose **{answer}**; the best answer is **{html.escape(str(correct_answer))}**."
         st.markdown(
             f"""
             <div class="level-card">
-                <b>{prompt}</b><br>
+                <b>{html.escape(prompt)}</b><br>
                 <span>{result}</span><br>
-                <span class="small-muted">{ASSESSMENT_EXPLANATIONS[key]}</span>
+                <span class="small-muted">{html.escape(ASSESSMENT_EXPLANATIONS[key])}</span>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1267,20 +1288,20 @@ if not st.session_state.logged:
                 st.rerun()
 
     with st.expander("🛠️ Instructor / Admin access"):
-        if ADMIN_PASSWORD_IS_DEFAULT:
-            st.warning(
-                "⚠️ No STATSQUEST_ADMIN_PASSWORD secret is set, so this app is using the "
-                "built-in default admin password. Set that secret before sharing this app "
-                "with students — the admin dashboard shows every participant's data."
+        if not ADMIN_ACCESS_ENABLED:
+            st.info(
+                "Admin access is disabled — no STATSQUEST_ADMIN_PASSWORD secret is set. "
+                "Set that secret to enable the instructor dashboard."
             )
-        admin_pw = st.text_input("Admin password", type="password", key="admin_pw_input")
-        if st.button("Enter Admin Dashboard"):
-            if admin_pw == ADMIN_PASSWORD:
-                st.session_state.logged = True
-                st.session_state.is_admin = True
-                st.rerun()
-            else:
-                st.error("Incorrect admin password.")
+        else:
+            admin_pw = st.text_input("Admin password", type="password", key="admin_pw_input")
+            if st.button("Enter Admin Dashboard"):
+                if hmac.compare_digest(admin_pw, ADMIN_PASSWORD):
+                    st.session_state.logged = True
+                    st.session_state.is_admin = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect admin password.")
 
     st.stop()
 
@@ -1314,7 +1335,7 @@ if st.session_state.is_admin:
         st.dataframe(admin_board, hide_index=True, width="stretch")
         st.download_button(
             "⬇️ Download leaderboard (CSV)",
-            admin_board.to_csv(index=False).encode("utf-8"),
+            csv_safe_export(admin_board, ["Name"]).to_csv(index=False).encode("utf-8"),
             "statsquest_leaderboard.csv",
             "text/csv",
         )
@@ -1335,7 +1356,7 @@ if st.session_state.is_admin:
         st.dataframe(log, hide_index=True, width="stretch")
         st.download_button(
             "⬇️ Download attempt log (CSV)",
-            log.to_csv(index=False).encode("utf-8"),
+            csv_safe_export(log, ["Name", "answer"]).to_csv(index=False).encode("utf-8"),
             "statsquest_attempts.csv",
             "text/csv",
         )

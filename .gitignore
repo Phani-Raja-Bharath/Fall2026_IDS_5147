@@ -8,6 +8,10 @@ __pycache__/
 .streamlit/secrets.toml
 **/.streamlit/secrets.toml
 
+# Private local notes (real passwords / access steps) -- never commit these
+ADMIN_ACCESS.local.md
+**/ADMIN_ACCESS.local.md
+
 # Local score databases
 stats_game.db
 **/stats_game.db
