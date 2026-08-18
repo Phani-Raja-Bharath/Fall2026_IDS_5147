@@ -139,7 +139,7 @@ def render(ctx):
 
     ctx.show_step_header(
         "Step 3 - Try",
-        "Now explain why Monte Carlo is run many times. Use the hint only if you need it.",
+        "Now explain why Monte Carlo is run many times.",
     )
     ctx.show_challenge_acknowledgement(pid, "L5_PURPOSE")
     q2 = ctx.answer_radio(
@@ -174,7 +174,7 @@ def render(ctx):
 
     ctx.show_step_header(
         "Step 4 - Apply",
-        "Use the same idea to make a decision in a new situation. This time there is no hint before you answer.",
+        "Use the same idea to make a decision in a new situation.",
     )
     st.write(
         "A project manager wants to estimate the probability that a construction project finishes "

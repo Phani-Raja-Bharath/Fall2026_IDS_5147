@@ -76,7 +76,7 @@ def render(ctx):
 
     ctx.show_step_header(
         "Step 3 - Try",
-        "Predict what a larger standard deviation will do, then check with the slider. Use the hint only if you need it.",
+        "Predict what a larger standard deviation will do, then check with the slider.",
     )
     sd_prediction = st.radio(
         ctx.content_get("level_copy.level_2_prediction", "Before you move the slider: what do you think increasing standard deviation from 5 to 20 will do?"),
@@ -139,7 +139,7 @@ def render(ctx):
 
     ctx.show_step_header(
         "Step 4 - Apply",
-        "Use the same idea in a new situation. This time there is no hint before you answer.",
+        "Use the same idea in a new situation.",
     )
     st.write(
         "Two delivery processes both average the same output. A quality report gives you their "

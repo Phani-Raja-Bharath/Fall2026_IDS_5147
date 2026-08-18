@@ -23,7 +23,7 @@ def render(ctx):
 
     ctx.show_step_header(
         "Step 2 - Explore",
-        "Use the commute data with support. Change one value and compare the statistics before answering.",
+        "Change one value in the commute data and compare the statistics before answering.",
     )
     st.markdown("#### Formula reference")
     ctx.show_level_1_formulas()
@@ -130,7 +130,7 @@ def render(ctx):
 
     ctx.show_step_header(
         "Step 3 - Try",
-        "Now solve a similar problem with less support. Use the hint only if you need it.",
+        "Now solve a similar problem.",
     )
     ctx.show_challenge_acknowledgement(pid, "L1_CENTER")
     hospital_base_waits = [8, 10, 11, 12, 13, 14]
@@ -181,7 +181,7 @@ def render(ctx):
 
     ctx.show_step_header(
         "Step 4 - Apply",
-        "Use the same idea in a new situation. This time there is no hint before you answer.",
+        "Use the same idea in a new situation.",
     )
     salaries = [42, 45, 47, 48, 51, 55, 600]
     st.write(

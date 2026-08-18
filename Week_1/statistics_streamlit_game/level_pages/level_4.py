@@ -119,7 +119,7 @@ def render(ctx):
 
     ctx.show_step_header(
         "Step 3 - Try",
-        "Now identify the distribution for the time between arrivals. Use the hint only if you need it.",
+        "Now identify the distribution for the time between arrivals.",
     )
     ctx.show_challenge_acknowledgement(pid, "L4_EXP")
     q2 = ctx.answer_radio(
@@ -149,7 +149,7 @@ def render(ctx):
 
     ctx.show_step_header(
         "Step 4 - Apply",
-        "Use the same idea in a new situation. This time there is no hint before you answer.",
+        "Use the same idea in a new situation.",
     )
     st.write(
         "A help desk is building a simulation of its call queue. It needs to model the time between "

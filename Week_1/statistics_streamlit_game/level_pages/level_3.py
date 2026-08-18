@@ -51,7 +51,7 @@ def render(ctx):
 
     ctx.show_step_header(
         "Step 3 - Try",
-        "Now match a second situation with less support. Use the hint only if you need it.",
+        "Now match a second situation.",
     )
     with st.expander("Distribution quick reference"):
         ctx.show_distribution_reference()
@@ -81,7 +81,7 @@ def render(ctx):
 
     ctx.show_step_header(
         "Step 4 - Apply",
-        "Match two new situations on your own. There is no reference table or hint on this step.",
+        "Match two new situations on your own.",
     )
 
     apply_questions = [

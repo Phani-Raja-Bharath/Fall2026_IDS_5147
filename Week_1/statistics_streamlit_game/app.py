@@ -861,7 +861,7 @@ def show_how_to_play():
     st.subheader("How to play")
     st.info(
         "Start with the Starting Check-In, then work through each level in order: "
-        "Watch a short video, Explore with support, Try with less support, and Apply on your own. "
+        "Watch a short video, then work through Explore, Try, and Apply. "
         "You get two scoring tries for each required question. First try earns full XP. "
         "Second try earns partial XP. After two wrong tries, keep trying until it is correct so the next page opens. "
         "Bonus questions are optional make-up XP."
@@ -1148,9 +1148,9 @@ def answer_radio(label, options, key, **kwargs):
     return st.radio(label, shuffled_options(key, options), key=key, **kwargs)
 
 def show_optional_hint(challenge, default_text=None):
-    """A student-requested hint, shown only if they open it. Used from Level 3
-    onward, where scaffolding fades from guided (Levels 1-2) to available-on-
-    request (Levels 3-4) to none (Level 5) — see self_regulation.scaffold_fading."""
+    """A student-requested hint, shown only if they open it. Used on the Try
+    stage of each level (Explore has visible support already on the page;
+    Apply has none)."""
     hint = content_get(f"hints.{challenge}", default_text)
     if not hint:
         return
