@@ -1104,14 +1104,13 @@ def show_level_progress(pid, level):
             else:
                 st.caption(f"🎁 Bonus challenge locked — it unlocks if you miss a question above.")
 
-def set_answer_feedback(kind, message, balloons=False, challenge=None):
+def set_answer_feedback(kind, message, challenge=None):
     st.session_state.answer_feedback = {
         "kind": kind,
         "message": message,
         "page": st.session_state.get("selected_page"),
         "challenge": challenge,
     }
-    st.session_state.show_balloons = balloons
 
 def show_answer_feedback():
     feedback = st.session_state.get("answer_feedback")
@@ -1132,9 +1131,6 @@ def show_answer_feedback():
         st.error(message)
     else:
         st.info(message)
-    if st.session_state.get("show_balloons"):
-        st.balloons()
-        st.session_state.show_balloons = False
 
 def shuffled_options(key, options):
     """Stable per-user option order so answers are randomized without rerun jitter."""
@@ -1240,9 +1236,6 @@ def show_challenge_acknowledgement(pid, challenge):
             show_challenge_status_box("two-wrong", "Second wrong attempt", message)
         else:
             show_challenge_status_box("info", "Challenge status", message)
-        if st.session_state.get("show_balloons"):
-            st.balloons()
-            st.session_state.show_balloons = False
         st.session_state.answer_feedback = None
         return
 
@@ -1364,7 +1357,7 @@ def score_answer(pid, level, challenge, answer, correct, base=20, correct_answer
                 success_message = format_correct_feedback("✅ Correct! This step is complete.", explanation)
 
         if recorded:
-            set_answer_feedback("success", success_message, balloons=True, challenge=challenge)
+            set_answer_feedback("success", success_message, challenge=challenge)
         else:
             # A concurrent submit (e.g. a fast double-click) already scored
             # this challenge first — idx_one_correct_per_challenge rejected
@@ -1415,7 +1408,6 @@ for key, default in {
     "last_name": "",
     "learning_goal": "",
     "answer_feedback": None,
-    "show_balloons": False,
     "last_selected_page": "",
 }.items():
     if key not in st.session_state:
