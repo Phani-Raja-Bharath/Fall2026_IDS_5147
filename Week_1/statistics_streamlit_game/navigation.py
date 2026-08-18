@@ -8,13 +8,13 @@ PAGE_LEVELS = {
 
 PAGE_OPTIONS = [
     "🏠 Home",
-    "🧭 Diagnostic Check-In",
+    "🧭 Starting Check-In",
     "🎯 Level 1 — The Unusual Commute",
     "📏 Level 2 — Same Average, Different Machines",
     "🎲 Level 3 — Choose the Right Randomness",
     "✈️ Level 4 — Airport Arrival Lab",
     "🏆 Level 5 — The Simulation Decision",
-    "📊 Mastery Check-Out",
+    "📊 Final Check-Out",
     "🥇 Leaderboard",
 ]
 

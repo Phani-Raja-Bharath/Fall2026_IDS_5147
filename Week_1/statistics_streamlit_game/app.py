@@ -524,7 +524,7 @@ def show_assessment_review(pid, phase):
 # hospital/machine/airport examples used during the levels, so the check-out
 # measures transfer of the concept instead of memory of the training example.
 ASSESSMENT_QUESTIONS = [
-    ("CENTER", "A small bakery tracks daily sales. One holiday saw sales **ten times higher** than a normal day. Which **typical-value statistic** is most affected by that one unusual day?",
+    ("CENTER", "A small bakery tracks daily sales. One holiday saw sales **ten times higher** than a normal day. Which statistic is most affected by that one unusual day?",
      ["Mean", "Median", "Mode", "Range"], "Mean"),
     ("SPREAD", "Two delivery drivers each average **30 minutes** per route. Which statistic tells you whose delivery times are more **consistent**?",
      ["Standard deviation", "Median", "Mode", "Sample size"], "Standard deviation"),
@@ -561,8 +561,8 @@ _DEFAULT_CONFIDENCE_SCALE = {
     "5": "Very comfortable",
 }
 _DEFAULT_CONFIDENCE_ITEMS = [
-    "Finding a useful typical value for a dataset",
-    "Understanding how spread out data is",
+    "Using mean, median, and mode",
+    "Using range, variance, and standard deviation",
     "Choosing a probability distribution for a situation",
     "Understanding random arrivals and waiting times",
     "Understanding why a simulation is run many times",
@@ -610,8 +610,8 @@ SELF_ASSESSMENT_VALUES = confidence_value_lookup()
 STORY = {
     "intro": (
         "**Welcome to StatsQuest.** This is a short game about statistics for modeling and simulation.\n\n"
-        "**Your mission:** help a simulation team make decisions from data. You will practice typical values, "
-        "spread, distributions, arrivals, and Monte Carlo simulation.\n\n"
+        "**Your mission:** help a simulation team make decisions from data. You will practice mean, median, mode, "
+        "range, variance, standard deviation, distributions, arrivals, and Monte Carlo simulation.\n\n"
         "Start with a quick confidence check-in. Then play each level, earn XP, and unlock the next step. "
         "The final check-out shows what changed. Check-ins do not affect XP."
     ),
@@ -646,14 +646,14 @@ YOUTUBE_RESOURCES = {
         (
             "Mean, median, and mode",
             "https://www.youtube.com/watch?v=5gxzPkAQdIg",
-            "Shows how to find a typical value in data and why median can help with outliers.",
+            "Reviews mean, median, and mode.",
         ),
     ],
     "level_2": [
         (
             "Range, variance, and standard deviation",
             "https://www.youtube.com/watch?v=A89FpnWX0rY",
-            "Explains range, variance, standard deviation, and why spread matters.",
+            "Reviews range, variance, and standard deviation.",
         ),
     ],
     "level_3": [
@@ -720,7 +720,7 @@ def show_youtube_resources(section_key):
     resources = YOUTUBE_RESOURCES.get(section_key, [])
     if not resources:
         return
-    st.subheader(f"📺 {content_get('home.resources_label', 'Need a quick refresher?')}")
+    st.subheader(f"📺 {content_get('home.resources_label', 'Review resources')}")
     resources_description = content_get("home.resources_description", "")
     if resources_description:
         st.caption(resources_description)
@@ -771,6 +771,12 @@ Formula: $\bar{x} = \frac{\sum x_i}{n}$
 
 **Range:** subtract the smallest value from the largest value.  
 Formula: $\text{Range} = \max - \min$
+
+**Variance:** measures squared distance from the mean.  
+Formula: $s^2 = \frac{\sum (x_i - \bar{x})^2}{n - 1}$
+
+**Standard deviation:** take the square root of variance.  
+Formula: $s = \sqrt{s^2}$
 """
     )
     title, body = split_markdown_title(formula_text, "Level 1 formulas")
@@ -831,11 +837,17 @@ def show_distribution_reference():
 
 def show_descriptive_stats(data, *, label_prefix=""):
     values = np.array(data)
-    modes = pd.Series(values).mode().tolist()
+    counts = pd.Series(values).value_counts()
+    if counts.empty or counts.max() == 1:
+        mode_display = "No repeated mode"
+    else:
+        most_common: pd.Series = counts.loc[counts == counts.max()]
+        modes = sorted(most_common.index.tolist())
+        mode_display = ", ".join(str(int(mode)) for mode in modes)
     labels = [
         ("Mean", f"{values.mean():.2f}"),
         ("Median", f"{np.median(values):.2f}"),
-        ("Mode", ", ".join(str(int(mode)) for mode in modes)),
+        ("Mode", mode_display),
         ("Range", f"{values.max() - values.min():.2f}"),
         ("Variance", f"{values.var(ddof=1):.2f}"),
         ("Std. deviation", f"{values.std(ddof=1):.2f}"),
@@ -848,7 +860,8 @@ def show_descriptive_stats(data, *, label_prefix=""):
 def show_how_to_play():
     st.subheader("How to play")
     st.info(
-        "Start with the Diagnostic Check-In. Then finish each level in order. "
+        "Start with the Starting Check-In, then work through each level in order: "
+        "Watch a short video, Explore with support, Try with less support, and Apply on your own. "
         "You get two scoring tries for each required question. First try earns full XP. "
         "Second try earns partial XP. After two wrong tries, keep trying until it is correct so the next page opens. "
         "Bonus questions are optional make-up XP."
@@ -876,15 +889,15 @@ def go_to_next_page():
     if next_page is None:
         return
     if current == "🏠 Home" and not personal_goal_complete():
-        set_answer_feedback("warning", "Choose a personal goal before moving to the Diagnostic Check-In.")
+        set_answer_feedback("warning", "Choose a personal goal before moving to the Starting Check-In.")
         return
-    if current == "🧭 Diagnostic Check-In" and not self_assessment_complete(st.session_state.pid, "pre"):
+    if current == "🧭 Starting Check-In" and not self_assessment_complete(st.session_state.pid, "pre"):
         set_answer_feedback("warning", "Complete all 5 baseline self-ratings before heading out.")
         return
-    if current == "📊 Mastery Check-Out" and not assessment_complete(st.session_state.pid, "post"):
+    if current == "📊 Final Check-Out" and not assessment_complete(st.session_state.pid, "post"):
         set_answer_feedback("warning", "Answer all 5 check-out questions before moving on.")
         return
-    if current == "📊 Mastery Check-Out" and not self_assessment_complete(st.session_state.pid, "post"):
+    if current == "📊 Final Check-Out" and not self_assessment_complete(st.session_state.pid, "post"):
         set_answer_feedback("warning", "Rate your confidence again before moving on — that's what shows your progress.")
         return
     current_level = PAGE_LEVELS.get(current)
@@ -1019,11 +1032,11 @@ def first_incomplete_level(pid):
 
 def first_incomplete_page(pid):
     if not self_assessment_complete(pid, "pre"):
-        return "🧭 Diagnostic Check-In" if personal_goal_complete() else "🏠 Home"
+        return "🧭 Starting Check-In" if personal_goal_complete() else "🏠 Home"
     level = first_incomplete_level(pid)
     if level is None:
         checkout_done = assessment_complete(pid, "post") and self_assessment_complete(pid, "post")
-        return "📊 Mastery Check-Out" if not checkout_done else "🥇 Leaderboard"
+        return "📊 Final Check-Out" if not checkout_done else "🥇 Leaderboard"
     for page, page_level in PAGE_LEVELS.items():
         if page_level == level:
             return page
@@ -1032,14 +1045,14 @@ def first_incomplete_page(pid):
 def page_accessible(pid, page):
     if page == "🏠 Home":
         return True
-    if page == "🧭 Diagnostic Check-In":
+    if page == "🧭 Starting Check-In":
         return personal_goal_complete()
     if not self_assessment_complete(pid, "pre"):
         return False  # the baseline check-in comes before everything else
     level = PAGE_LEVELS.get(page)
     if level is not None:
         return all(level_complete(pid, earlier) for earlier in range(1, level))
-    if page == "📊 Mastery Check-Out":
+    if page == "📊 Final Check-Out":
         return level_complete(pid, 5)
     if page == "🥇 Leaderboard":
         return (
@@ -1160,6 +1173,52 @@ def show_challenge_status_box(status, title, message):
         unsafe_allow_html=True,
     )
 
+# -----------------------------
+# Shared level-page building blocks
+# -----------------------------
+# Every level_pages/level_N.py page follows the same Watch/Explore/Try/Apply
+# shape, so the pieces of that shape live here once instead of being
+# reimplemented (and drifting) in each level file.
+
+def is_stage_complete(pid, challenge):
+    return challenge in correct_challenges(pid)
+
+def show_step_header(title, body=None):
+    st.subheader(title)
+    if body:
+        st.write(body)
+
+def show_scenario_card(title, story, values=None):
+    value_line = f"<code>{html.escape(', '.join(str(v) for v in values))}</code>" if values is not None else ""
+    st.markdown(
+        f"""
+        <div class="level-card">
+            <b>{html.escape(title)}</b><br>
+            <span>{html.escape(story)}</span><br>
+            {value_line}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def show_record_status(recorded, done_title, pending_title, done_message, pending_message):
+    if recorded:
+        show_challenge_status_box("correct", done_title, done_message)
+    else:
+        show_challenge_status_box("unanswered", pending_title, pending_message)
+
+def show_video_acknowledgement(pid, level, video_challenge_id, key):
+    """Renders the 'I watched the video' checkbox, records it (0 XP) the
+    first time it's checked, and returns whether Step 1 - Watch is done."""
+    watched = st.checkbox(
+        "I watched the video and am ready to continue.",
+        value=is_stage_complete(pid, video_challenge_id),
+        key=key,
+    )
+    if watched:
+        record_completion_once(pid, level, video_challenge_id, f"Watched Level {level} video")
+    return is_stage_complete(pid, video_challenge_id)
+
 def show_challenge_acknowledgement(pid, challenge):
     feedback = st.session_state.get("answer_feedback")
     if (
@@ -1250,7 +1309,18 @@ def format_wrong_feedback(message, answer, correct_answer=None, explanation=None
         return f"{message}\n\n" + "\n\n".join(details)
     return message
 
-def score_answer(pid, level, challenge, answer, correct, base=20, correct_answer=None, explanation=None):
+STAGE_LABELS = {"explore": "Explore", "try": "Try", "apply": "Apply"}
+
+def score_answer(pid, level, challenge, answer, correct, base=20, correct_answer=None, explanation=None, stage=None):
+    """`stage` (None, "explore", "try", or "apply") controls whether a wrong
+    *non-final* attempt reveals the correct answer. Per the faded-scaffolding
+    spec, no stage should hand over the answer before scoring attempts are
+    exhausted -- Explore gets targeted-but-non-revealing feedback, Try adds
+    an optional on-request hint elsewhere on the page, Apply gets only a
+    bare retry prompt. `stage=None` (bonus questions, and any question not
+    yet part of a staged level) keeps the original immediate-reveal
+    behavior. The correct answer and explanation are always shown once
+    scoring attempts are exhausted, regardless of stage."""
     if answer is None or str(answer).strip() == "":
         message = "Choose an answer before submitting."
         set_answer_feedback("warning", message, challenge=challenge)
@@ -1265,21 +1335,33 @@ def score_answer(pid, level, challenge, answer, correct, base=20, correct_answer
         show_challenge_status_box("info", "Challenge status", message)
         return
 
+    if challenge.endswith("_BONUS"):
+        base = min(base, level_bonus_remaining_xp(pid, level))
+
     wrong_so_far = len(history)  # every recorded attempt here is a wrong one
     attempt_number = wrong_so_far + 1
     is_final_attempt = attempt_number == MAX_WRONG_ATTEMPTS
 
     if correct:
         if is_final_attempt:
-            points = max(5, int(base * CONSOLATION_FRACTION))
+            points = max(5, int(base * CONSOLATION_FRACTION)) if base > 0 else 0
             recorded = add_attempt(pid, level, challenge, answer, True, points)
-            success_message = format_correct_feedback(f"✅ Correct! +{points} XP (partial credit)", explanation)
+            if points > 0:
+                success_message = format_correct_feedback(f"✅ Correct! +{points} XP (partial credit)", explanation)
+            else:
+                success_message = format_correct_feedback("✅ Correct! This step is complete.", explanation)
         elif attempt_number > MAX_WRONG_ATTEMPTS:
             recorded = add_attempt(pid, level, challenge, answer, True, 0)
-            success_message = format_correct_feedback("✅ Correct! No XP was left, but the question is complete.", explanation)
+            if base > 0:
+                success_message = format_correct_feedback("✅ Correct! No XP was left, but the question is complete.", explanation)
+            else:
+                success_message = format_correct_feedback("✅ Correct! This step is complete.", explanation)
         else:
             recorded = add_attempt(pid, level, challenge, answer, True, base)
-            success_message = format_correct_feedback(f"✅ Correct! +{base} XP", explanation)
+            if base > 0:
+                success_message = format_correct_feedback(f"✅ Correct! +{base} XP", explanation)
+            else:
+                success_message = format_correct_feedback("✅ Correct! This step is complete.", explanation)
 
         if recorded:
             set_answer_feedback("success", success_message, balloons=True, challenge=challenge)
@@ -1293,24 +1375,32 @@ def score_answer(pid, level, challenge, answer, correct, base=20, correct_answer
         add_attempt(pid, level, challenge, answer, False, 0)
         remaining = MAX_WRONG_ATTEMPTS - attempt_number
         if remaining > 0:
-            consolation = max(5, int(base * CONSOLATION_FRACTION))
-            message = format_wrong_feedback(
-                f"❌ Not quite. {remaining} scoring try/tries left. "
-                f"A correct answer next time earns partial credit (+{consolation} XP).",
-                answer,
-                correct_answer,
-                explanation,
-            )
+            if base > 0:
+                consolation = max(5, int(base * CONSOLATION_FRACTION))
+                retry_message = (
+                    f"❌ Not quite. {remaining} scoring try/tries left. "
+                    f"A correct answer next time earns partial credit (+{consolation} XP)."
+                )
+            else:
+                retry_message = f"❌ Not quite. {remaining} try/tries left. Choose the best answer to complete this step."
+            if stage in STAGE_LABELS:
+                # Withhold the answer while tries remain -- this is what
+                # keeps Explore/Try/Apply an actual first attempt instead of
+                # a reveal-then-retry loop.
+                if stage == "try":
+                    retry_message += " Use the hint on this page if you'd like one."
+                message = format_wrong_feedback(retry_message, answer)
+            else:
+                message = format_wrong_feedback(retry_message, answer, correct_answer, explanation)
             set_answer_feedback("warning", message, challenge=challenge)
             show_challenge_status_box("one-wrong", "One wrong attempt", message)
         else:
             reveal = f" The correct answer was **{correct_answer}**." if correct_answer is not None else ""
-            message = format_wrong_feedback(
-                f"❌ Not quite. No scoring tries are left, so this question is now worth 0 XP.{reveal} Keep trying until it is correct.",
-                answer,
-                correct_answer,
-                explanation,
-            )
+            if base > 0:
+                retry_message = f"❌ Not quite. No scoring tries are left, so this question is now worth 0 XP.{reveal} Keep trying until it is correct."
+            else:
+                retry_message = f"❌ Not quite.{reveal} Keep trying until it is correct."
+            message = format_wrong_feedback(retry_message, answer, correct_answer, explanation)
             set_answer_feedback("error", message, challenge=challenge)
             show_challenge_status_box("two-wrong", "Second wrong attempt", message)
 
@@ -1664,14 +1754,19 @@ page_ctx = SimpleNamespace(
     record_completion_once=record_completion_once,
     bonus_unlocked=bonus_unlocked,
     correct_challenges=correct_challenges,
+    is_stage_complete=is_stage_complete,
+    show_step_header=show_step_header,
+    show_scenario_card=show_scenario_card,
+    show_record_status=show_record_status,
+    show_video_acknowledgement=show_video_acknowledgement,
     show_next_button=show_next_button,
 )
 
 # -----------------------------
-# Pre-assessment (Diagnostic Check-In)
+# Pre-assessment (Starting Check-In)
 # -----------------------------
-if selected == "🧭 Diagnostic Check-In":
-    st.header("🧭 Diagnostic Check-In")
+if selected == "🧭 Starting Check-In":
+    st.header("🧭 Starting Check-In")
     st.markdown(STORY["pre_assessment"])
 
     if self_assessment_complete(pid, "pre"):
@@ -1707,9 +1802,9 @@ if selected == "🧭 Diagnostic Check-In":
 # -----------------------------
 elif selected == "🏠 Home":
     st.header("🗺️ Game Map")
-    show_youtube_resources("home")
     st.markdown(STORY["intro"])
     show_how_to_play()
+    show_youtube_resources("home")
     show_formula_reference()
 
     for level, info in LEVELS.items():
@@ -1795,10 +1890,10 @@ elif selected == PAGE_OPTIONS[6]:
     render_level_5(page_ctx)
 
 # -----------------------------
-# Post-assessment (Mastery Check-Out)
+# Post-assessment (Final Check-Out)
 # -----------------------------
-elif selected == "📊 Mastery Check-Out":
-    st.header("📊 Mastery Check-Out")
+elif selected == "📊 Final Check-Out":
+    st.header("📊 Final Check-Out")
     st.markdown(STORY["post_assessment"])
 
     quiz_done = assessment_complete(pid, "post")
@@ -1883,7 +1978,7 @@ elif selected == "🥇 Leaderboard":
         )
     show_next_button()
     st.success("You have reached the end of StatsQuest.")
-    st.info("Before exiting, save a screenshot of this Leaderboard page and share it with your TA or professor.")
+    st.info("Before exiting, save a screenshot of this page and share it with your TA or professor.")
     if st.button("Exit application", type="primary", width="stretch"):
         st.session_state.logged = False
         st.session_state.is_admin = False

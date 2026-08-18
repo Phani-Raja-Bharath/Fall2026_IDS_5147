@@ -1,6 +1,6 @@
 {
   "story": {
-    "intro": "**Welcome to StatsQuest.** You're joining a simulation team that needs to make sense of real-world data.\n\nAcross five short challenges, you'll work with averages, variability, probability distributions, arrivals, and simulation results.\n\nTry things, change values, use the resources when you need them, and see what happens. Earn XP as you complete each challenge.",
+    "intro": "**Welcome to StatsQuest.** You're joining a simulation team that needs to make sense of real-world data.\n\nAcross five short challenges, you'll work with mean, median, mode, range, variance, standard deviation, probability distributions, arrivals, and simulation results.\n\nTry things, change values, use the resources when you need them, and see what happens. Earn XP as you complete each challenge.",
     "pre_assessment": "Before you begin, tell us how comfortable you currently feel with a few topics. There are no right or wrong answers here, and this does not affect your XP.",
     "post_assessment": "You've finished the challenges. Try these final questions, then tell us how comfortable you feel with the same topics now.",
     "levels": {
@@ -16,7 +16,7 @@
   "home": {
     "mission": "Complete five challenges and help the simulation team understand what the data is telling them.",
     "start_button": "Start StatsQuest",
-    "resources_label": "Need a quick refresher?",
+    "resources_label": "Review resources",
     "resources_description": "Videos and formulas are available whenever you want them."
   },
 
@@ -31,8 +31,8 @@
         "5": "Very comfortable"
       },
       "items": [
-        "Finding a useful typical value for a dataset",
-        "Understanding how spread out data is",
+        "Using mean, median, and mode",
+        "Using range, variance, and standard deviation",
         "Choosing a probability distribution for a situation",
         "Understanding random arrivals and waiting times",
         "Understanding why a simulation is run many times"
@@ -60,8 +60,8 @@
         "5": "Very comfortable"
       },
       "items": [
-        "Finding a useful typical value for a dataset",
-        "Understanding how spread out data is",
+        "Using mean, median, and mode",
+        "Using range, variance, and standard deviation",
         "Choosing a probability distribution for a situation",
         "Understanding random arrivals and waiting times",
         "Understanding why a simulation is run many times"
@@ -81,14 +81,14 @@
       {
         "title": "Mean, median, and mode",
         "url": "https://youtu.be/FLqp7tUPeEY?si=Vtz0C98GLZUIkWha",
-        "description": "A quick refresher on different ways to describe a typical value in data."
+        "description": "Review mean, median, and mode."
       }
     ],
     "level_2": [
       {
         "title": "Range, variance, and standard deviation",
         "url": "https://youtu.be/LVT9m-HuFT8?si=K4Vu1YuITnJz8zYK",
-        "description": "A quick refresher on how we describe variability."
+        "description": "Review range, variance, and standard deviation."
       }
     ],
     "level_3": [
@@ -131,13 +131,13 @@
 
   "formulas": {
     "home": "Quick reference\n\n**Mean**  \n$\\bar{x}=\\frac{\\sum x_i}{n}$\n\n**Median**  \nSort the values and find the middle.\n\n**Mode**  \nThe value that appears most often.\n\n**Range**  \n$\\text{Range}=\\max-\\min$\n\n**Sample variance**  \n$s^2=\\frac{\\sum(x_i-\\bar{x})^2}{n-1}$\n\n**Sample standard deviation**  \n$s=\\sqrt{s^2}$",
-    "level_1": "Need a formula?\n\n**Mean**  \n$\\bar{x}=\\frac{\\sum x_i}{n}$\n\n**Median**  \nSort the values and find the middle.\n\n**Mode**  \nFind the value that appears most often.\n\n**Range**  \n$\\text{Range}=\\max-\\min$",
+    "level_1": "Need a formula?\n\n**Mean**  \n$\\bar{x}=\\frac{\\sum x_i}{n}$\n\n**Median**  \nSort the values and find the middle.\n\n**Mode**  \nFind the value that appears most often.\n\n**Range**  \n$\\text{Range}=\\max-\\min$\n\n**Sample variance**  \n$s^2=\\frac{\\sum(x_i-\\bar{x})^2}{n-1}$\n\n**Sample standard deviation**  \n$s=\\sqrt{s^2}$",
     "level_2": "Need a formula?\n\n**Range**  \n$\\text{Range}=\\max-\\min$\n\n**Sample variance**  \n$s^2=\\frac{\\sum(x_i-\\bar{x})^2}{n-1}$\n\n**Sample standard deviation**  \n$s=\\sqrt{s^2}$",
     "level_4": "Need a formula?\n\n**Poisson — number of arrivals:**\nFormula: $P(X = k) = \\dfrac{\\lambda^k e^{-\\lambda}}{k!}$\n\n**Exponential — time between arrivals:**\nFormula: $f(t) = \\lambda e^{-\\lambda t}$, mean wait $= \\dfrac{1}{\\lambda}$"
   },
 
   "hints": {
-    "L3_Q1": "Do the values cluster around an average, or are they spread evenly across a range?",
+    "L3_Q1": "Do the values cluster around an average, or are all values in a range equally likely?",
     "L3_Q2": "This describes exactly one trial with two possible outcomes.",
     "L3_Q3": "You're counting successes across a fixed number of separate yes/no trials.",
     "L3_Q4": "No value in the range is any more likely than another.",
@@ -163,18 +163,18 @@
     "level_1_observe": "Did that match what you expected?",
     "level_1_outlier_input": "Enter a **very large outlier** to replace the final commute time",
     "level_1_outlier_caption": "Try values like 90, 200, or 600 and watch the statistics change.",
-    "level_1_q1": "Which statistic for the **typical commute time** changes the most because of the **very large outlier**?",
+    "level_1_q1": "Which statistic changes the most because of the **very large outlier**?",
     "level_1_q1_explanation": "The mean uses every value, so one very large value pulls it up.",
     "level_1_transition": "Let's see if the same idea holds somewhere else.",
     "level_1_hospital_intro": "A hospital usually sees wait times close to 10 minutes.",
     "level_1_hospital_outlier_input": "Add one **unusually long wait time**",
-    "level_1_hospital_prompt": "One patient waited much longer than usual. The hospital wants one number to describe a typical patient's wait.",
-    "level_1_q2": "Which statistic would you report for the **typical wait**?",
+    "level_1_hospital_prompt": "One patient waited much longer than the others. The hospital wants one statistic to summarize the wait times.",
+    "level_1_q2": "Which statistic should the hospital report?",
     "level_1_q2_explanation": "The median stays close to the usual waits because one unusually long wait does not pull it much.",
-    "level_1_reflection": "Finish this thought: when data has an extreme outlier, I should check ______ before describing a typical value.",
+    "level_1_reflection": "Finish this thought: when data has an extreme outlier, I should compare ______ before choosing a statistic.",
     "level_1_bonus_q": "If one value becomes a **very large outlier** and the smallest value stays the same, what happens to the **range**?",
     "level_1_bonus_explanation": "Range is maximum minus minimum. If the maximum gets larger and the minimum stays the same, the range increases.",
-    "level_2_focus": "This challenge is about **spread**: how close together or far apart the values are.",
+    "level_2_focus": "This challenge is about **range, variance, and standard deviation**.",
     "level_2_intro": "Two machines make parts near 10 units. Look at the values first, then decide which machine is more consistent.",
     "level_2_reveal": "Same mean. Different variability.",
     "level_2_q1": "Both machines have the same **mean**. Which machine is more **consistent**?",
@@ -184,7 +184,7 @@
     "level_2_sd_caption": "A larger standard deviation means values are farther from the mean.",
     "level_2_chart_caption": "A larger standard deviation makes the chart wider.",
     "level_2_q2": "As **standard deviation** increases, what happens to the **data values** in the chart?",
-    "level_2_q2_explanation": "Standard deviation measures typical distance from the mean.",
+    "level_2_q2_explanation": "Standard deviation measures distance from the mean.",
     "level_2_bonus_q": "Which quantity is the square of the **standard deviation**?",
     "level_2_bonus_explanation": "Variance is standard deviation squared.",
     "level_4_prediction": "Before you try it: if the average arrival rate doubles, what do you think happens to the average wait between passengers?",

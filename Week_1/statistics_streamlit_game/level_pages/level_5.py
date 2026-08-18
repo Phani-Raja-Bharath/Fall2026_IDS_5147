@@ -1,4 +1,4 @@
-﻿import math
+import math
 
 import numpy as np
 import pandas as pd
@@ -7,9 +7,27 @@ import streamlit as st
 
 def render(ctx):
     pid = ctx.pid
+    completed = ctx.correct_challenges(pid)
+
     st.header(ctx.STORY["levels"][5])
+    st.caption("Level 5 follows four steps: Watch, Explore, Try, and Apply.")
+
+    ctx.show_step_header(
+        "Step 1 - Watch",
+        "Before starting this level, watch the short video. It introduces the Monte Carlo idea.",
+    )
     ctx.show_youtube_resources("level_5")
-    st.write("Airport security workload depends on how many passengers arrive and how long each one takes.")
+    watched = ctx.show_video_acknowledgement(pid, 5, "L5_VIDEO_ACK", key="l5_video_ack")
+    if not watched:
+        st.info("Complete Step 1 before starting the activity.")
+        ctx.show_level_progress(pid, 5)
+        ctx.show_next_button()
+        return
+
+    ctx.show_step_header(
+        "Step 2 - Explore",
+        "Airport security workload depends on how many passengers arrive and how long each one takes.",
+    )
     st.info("A fixed model gives one answer. A random simulation gives many possible answers, so you can see risk.")
 
     prediction = st.radio(
@@ -21,8 +39,20 @@ def render(ctx):
         index=None,
         key="l5_prediction",
     )
-    if prediction:
-        st.caption(f"Prediction recorded: {prediction}")
+    prediction_recorded = "L5_PREDICT" in completed
+    if st.button("Submit prediction", key="l5_prediction_submit"):
+        if not prediction:
+            ctx.show_challenge_status_box("one-wrong", "Prediction required", "Choose a prediction before submitting.")
+        else:
+            ctx.record_completion_once(pid, 5, "L5_PREDICT", prediction)
+            prediction_recorded = True
+    ctx.show_record_status(
+        prediction_recorded,
+        "Prediction submitted",
+        "Prediction not submitted",
+        "Your prediction is saved. Now change the number of runs and compare the results.",
+        "Choose a prediction, then click Submit prediction.",
+    )
 
     arrivals = st.slider("Average arrivals / 10 min", 2, 20, 8)
     service = st.slider("Average service time (min)", 0.5, 4.0, 1.5, 0.1)
@@ -55,13 +85,24 @@ def render(ctx):
         index=None,
         key="l5_observe",
     )
-    if observed:
-        st.caption(f"Observation recorded: {observed}")
+    observation_recorded = "L5_OBSERVE" in completed
+    if st.button("Submit observation", key="l5_observation_submit"):
+        if not observed:
+            ctx.show_challenge_status_box("one-wrong", "Observation required", "Choose an observation before submitting.")
+        else:
+            ctx.record_completion_once(pid, 5, "L5_OBSERVE", observed)
+            observation_recorded = True
+    ctx.show_record_status(
+        observation_recorded,
+        "Observation submitted",
+        "Observation not submitted",
+        "Your observation is saved. You can now answer the Explore question.",
+        "Choose whether the result matched your prediction, then click Submit observation.",
+    )
 
-    st.subheader("Question 1")
     ctx.show_challenge_acknowledgement(pid, "L5_STABILITY")
     q1 = ctx.answer_radio(
-        "What usually happens to a **Monte Carlo estimate** as the **number of runs** increases?",
+        "Explore question: what usually happens to a **Monte Carlo estimate** as the **number of runs** increases?",
         [
             "It generally becomes more stable",
             "It always becomes larger",
@@ -70,22 +111,39 @@ def render(ctx):
         ],
         key="l5q1",
     )
-    if st.button("Submit answer", key="l5submit1"):
-        ctx.score_answer(
-            pid,
-            5,
-            "L5_STABILITY",
-            q1,
-            q1 == "It generally becomes more stable",
-            45,
-            correct_answer="It generally becomes more stable",
-            explanation="More runs average out random noise.",
-        )
+    if st.button("Submit Explore answer", key="l5submit1"):
+        if not prediction_recorded or not observation_recorded:
+            ctx.show_challenge_status_box(
+                "one-wrong",
+                "Required steps missing",
+                "Submit a prediction and submit your observation before answering.",
+            )
+        else:
+            ctx.score_answer(
+                pid,
+                5,
+                "L5_STABILITY",
+                q1,
+                q1 == "It generally becomes more stable",
+                45,
+                correct_answer="It generally becomes more stable",
+                explanation="More runs average out random noise.",
+                stage="explore",
+            )
 
-    st.subheader("Question 2")
+    if not ctx.is_stage_complete(pid, "L5_STABILITY"):
+        st.info("Complete Step 2 to unlock Step 3.")
+        ctx.show_level_progress(pid, 5)
+        ctx.show_next_button()
+        return
+
+    ctx.show_step_header(
+        "Step 3 - Try",
+        "Now explain why Monte Carlo is run many times. Use the hint only if you need it.",
+    )
     ctx.show_challenge_acknowledgement(pid, "L5_PURPOSE")
     q2 = ctx.answer_radio(
-        "Why run **Monte Carlo** many times instead of using **one random simulation**?",
+        "Try question: why run **Monte Carlo** many times instead of using **one random simulation**?",
         [
             "To estimate possible outcomes and their chances",
             "To eliminate all uncertainty",
@@ -94,7 +152,8 @@ def render(ctx):
         ],
         key="l5q2",
     )
-    if st.button("Submit final answer", key="l5submit2"):
+    ctx.show_optional_hint("L5_PURPOSE", "Think about how much randomness there is from one single run to the next.")
+    if st.button("Submit Try answer", key="l5submit2"):
         ctx.score_answer(
             pid,
             5,
@@ -104,13 +163,52 @@ def render(ctx):
             45,
             correct_answer="To estimate possible outcomes and their chances",
             explanation="Monte Carlo repeats random simulations to show what could happen.",
+            stage="try",
+        )
+
+    if not ctx.is_stage_complete(pid, "L5_PURPOSE"):
+        st.info("Complete Step 3 to unlock Step 4.")
+        ctx.show_level_progress(pid, 5)
+        ctx.show_next_button()
+        return
+
+    ctx.show_step_header(
+        "Step 4 - Apply",
+        "Use the same idea to make a decision in a new situation. This time there is no hint before you answer.",
+    )
+    st.write(
+        "A project manager wants to estimate the probability that a construction project finishes "
+        "within 90 days."
+    )
+    ctx.show_challenge_acknowledgement(pid, "L5_APPLY")
+    q3 = ctx.answer_radio(
+        "Apply question: why should the project manager run the simulation many times instead of once?",
+        [
+            "To estimate possible outcomes and their chances",
+            "To guarantee the project finishes on time",
+            "To remove randomness from the estimate",
+            "To make every simulated project identical",
+        ],
+        key="l5apply",
+    )
+    if st.button("Submit Apply answer", key="l5submit_apply"):
+        ctx.score_answer(
+            pid,
+            5,
+            "L5_APPLY",
+            q3,
+            q3 == "To estimate possible outcomes and their chances",
+            45,
+            correct_answer="To estimate possible outcomes and their chances",
+            explanation="One run only shows one possible outcome; many runs show the range of outcomes and how likely each is.",
+            stage="apply",
         )
 
     st.subheader("Bonus Question")
     if ctx.bonus_unlocked(pid, 5):
         st.caption("Optional. Use this to earn back missed XP.")
         ctx.show_challenge_acknowledgement(pid, "L5_BONUS")
-        q3 = ctx.answer_radio(
+        q4 = ctx.answer_radio(
             "Which method can make a **Monte Carlo estimate** more **precise**?",
             [
                 "A method to get more precise estimates with fewer runs",
@@ -120,13 +218,13 @@ def render(ctx):
             ],
             key="l5q3",
         )
-        if st.button("Submit bonus answer", key="l5submit3"):
+        if st.button("Submit Bonus answer", key="l5submit3"):
             ctx.score_answer(
                 pid,
                 5,
                 "L5_BONUS",
-                q3,
-                q3 == "A method to get more precise estimates with fewer runs",
+                q4,
+                q4 == "A method to get more precise estimates with fewer runs",
                 45,
                 correct_answer="A method to get more precise estimates with fewer runs",
                 explanation="Variance reduction lowers simulation noise.",
