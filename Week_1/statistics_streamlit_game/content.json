@@ -40,13 +40,13 @@
     },
 
     "goal_setting": {
-      "prompt": "What would you most like to get better at today?",
+      "prompt": "What matters most to you as you go through this?",
       "options": [
-        "Understanding basic statistics",
-        "Understanding variability",
-        "Choosing probability distributions",
-        "Understanding simulation inputs",
-        "Understanding Monte Carlo simulation"
+        "Feeling confident, even if I make mistakes along the way",
+        "Really understanding why things work, not just memorizing steps",
+        "Getting ready for a quiz, exam, or assignment",
+        "Seeing how this connects to real projects",
+        "Just finishing and seeing how I do"
       ]
     },
 
@@ -132,7 +132,8 @@
   "formulas": {
     "home": "Quick reference\n\n**Mean**  \n$\\bar{x}=\\frac{\\sum x_i}{n}$\n\n**Median**  \nSort the values and find the middle.\n\n**Mode**  \nThe value that appears most often.\n\n**Range**  \n$\\text{Range}=\\max-\\min$\n\n**Sample variance**  \n$s^2=\\frac{\\sum(x_i-\\bar{x})^2}{n-1}$\n\n**Sample standard deviation**  \n$s=\\sqrt{s^2}$",
     "level_1": "Need a formula?\n\n**Mean**  \n$\\bar{x}=\\frac{\\sum x_i}{n}$\n\n**Median**  \nSort the values and find the middle.\n\n**Mode**  \nFind the value that appears most often.\n\n**Range**  \n$\\text{Range}=\\max-\\min$",
-    "level_2": "Need a formula?\n\n**Range**  \n$\\text{Range}=\\max-\\min$\n\n**Sample variance**  \n$s^2=\\frac{\\sum(x_i-\\bar{x})^2}{n-1}$\n\n**Sample standard deviation**  \n$s=\\sqrt{s^2}$"
+    "level_2": "Need a formula?\n\n**Range**  \n$\\text{Range}=\\max-\\min$\n\n**Sample variance**  \n$s^2=\\frac{\\sum(x_i-\\bar{x})^2}{n-1}$\n\n**Sample standard deviation**  \n$s=\\sqrt{s^2}$",
+    "level_4": "Need a formula?\n\n**Poisson — number of arrivals:**\nFormula: $P(X = k) = \\dfrac{\\lambda^k e^{-\\lambda}}{k!}$\n\n**Exponential — time between arrivals:**\nFormula: $f(t) = \\lambda e^{-\\lambda t}$, mean wait $= \\dfrac{1}{\\lambda}$"
   },
 
   "hints": {

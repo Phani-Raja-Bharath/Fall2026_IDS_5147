@@ -79,9 +79,9 @@ login — using the exact same name and PIN again resumes their progress. The PI
 participants who happen to share a name don't collide into the same record, and so no one else
 can casually view or answer for someone else.
 
-There is no way to recover a forgotten PIN short of looking it up in the Admin Dashboard's
-attempt log (matched by name) or clearing that person's rows from the database directly — tell
-participants to remember their PIN.
+If someone forgets their PIN, open the Admin Dashboard's **👤 Participants** section and search
+by name — it lists every registered participant's PIN directly (that section is admin-only, and
+the PIN is never shown to other students).
 
 ## Admin Dashboard — checking scores
 

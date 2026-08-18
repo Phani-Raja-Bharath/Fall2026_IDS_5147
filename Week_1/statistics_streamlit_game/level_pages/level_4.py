@@ -12,6 +12,7 @@ def render(ctx):
         "An airport wants to model passengers arriving at security. Use Poisson for the number of arrivals "
         "and Exponential for the time between arrivals."
     )
+    ctx.show_level_4_formulas()
 
     prediction = st.radio(
         ctx.content_get(

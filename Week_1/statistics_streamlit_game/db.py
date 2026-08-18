@@ -225,6 +225,20 @@ def register_participant(first, last, pin):
     return pid, first.strip(), last.strip()
 
 
+def all_participants() -> pd.DataFrame:
+    """Every registered participant with their PIN, for the admin dashboard's
+    PIN lookup -- includes participants with zero recorded attempts yet,
+    unlike a query joined through challenge_attempts."""
+    connection = conn()
+    df = connection.read_sql(
+        sql('SELECT first_name AS "First name", last_name AS "Last name", '
+            'pin AS "PIN", created_at AS "Registered" FROM participants '
+            "ORDER BY created_at")
+    )
+    connection.close()
+    return df
+
+
 def is_duplicate_correct_attempt(error):
     if isinstance(error, sqlite3.IntegrityError):
         return True

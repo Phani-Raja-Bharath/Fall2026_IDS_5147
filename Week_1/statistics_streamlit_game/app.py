@@ -16,6 +16,7 @@ import db  # module reference (not `from db import USE_POSTGRES`) so it reflects
            # the value *after* configure_database() runs, not the import-time default
 from db import (
     add_attempt,
+    all_participants,
     configure_database,
     conn,
     ensure_schema,
@@ -790,6 +791,23 @@ Formula: $s = \sqrt{s^2}$
     st.subheader(title)
     st.markdown(body)
 
+def show_level_4_formulas():
+    formula_text = content_get(
+        "formulas.level_4",
+        r"""
+Need a formula?
+
+**Poisson — number of arrivals:**
+Formula: $P(X = k) = \dfrac{\lambda^k e^{-\lambda}}{k!}$
+
+**Exponential — time between arrivals:**
+Formula: $f(t) = \lambda e^{-\lambda t}$, mean wait $= \dfrac{1}{\lambda}$
+"""
+    )
+    title, body = split_markdown_title(formula_text, "Need a formula?")
+    st.subheader(title)
+    st.markdown(body)
+
 def show_distribution_reference():
     st.subheader("Distribution quick reference")
     distribution_df = pd.DataFrame(
@@ -1421,6 +1439,32 @@ if st.session_state.is_admin:
             "text/csv",
         )
 
+    st.subheader("👤 Participants")
+    st.caption(
+        "Look someone up if they forgot their PIN — this table (and its CSV) is only "
+        "visible here, never to other students."
+    )
+    participants_df = all_participants()
+    if participants_df.empty:
+        st.info("No participants yet.")
+    else:
+        name_filter = st.text_input("Filter by name", key="admin_participant_filter", placeholder="e.g. Smith")
+        filtered_participants = participants_df
+        if name_filter.strip():
+            needle = name_filter.strip().lower()
+            name_mask = (
+                participants_df["First name"].str.lower().str.contains(needle, regex=False)
+                | participants_df["Last name"].str.lower().str.contains(needle, regex=False)
+            )
+            filtered_participants = participants_df.loc[name_mask]
+        st.dataframe(filtered_participants, hide_index=True, width="stretch")
+        st.download_button(
+            "⬇️ Download participants (CSV)",
+            csv_safe_export(filtered_participants, ["First name", "Last name"]).to_csv(index=False).encode("utf-8"),
+            "statsquest_participants.csv",
+            "text/csv",
+        )
+
     st.subheader("📜 Full attempt log")
     c = conn()
     log = c.read_sql("""
@@ -1597,6 +1641,7 @@ page_ctx = SimpleNamespace(
     show_level_progress=show_level_progress,
     show_level_1_formulas=show_level_1_formulas,
     show_level_2_formulas=show_level_2_formulas,
+    show_level_4_formulas=show_level_4_formulas,
     show_distribution_reference=show_distribution_reference,
     show_descriptive_stats=show_descriptive_stats,
     show_challenge_acknowledgement=show_challenge_acknowledgement,
